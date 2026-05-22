@@ -1,0 +1,288 @@
+// =============================================================
+//  雞蛋產銷履歷追蹤系統 - XRPL Testnet + Xaman SDK
+//  不使用傳統資料庫，所有物流狀態皆寫入 XRPL Transaction Memo
+// =============================================================
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
+const xrpl = require('xrpl');
+
+// ----- Xumm SDK -----
+const { XummSdk } = require('xumm-sdk');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.use(cors());
+app.use(express.json());
+app.use(express.static('public'));
+
+// ============================================================
+//  工具函式
+// ============================================================
+const toHex   = str => Buffer.from(str, 'utf8').toString('hex').toUpperCase();
+const fromHex = hex => Buffer.from(hex, 'hex').toString('utf8');
+
+const XRPL_EPOCH_OFFSET = 946684800; // 秒數: 2000-01-01 00:00:00 UTC
+const txDateToISO = rippleSec =>
+  new Date((rippleSec + XRPL_EPOCH_OFFSET) * 1000).toISOString();
+
+// ============================================================
+//  Xaman SDK 初始化
+// ============================================================
+const XUMM_API_KEY    = process.env.XUMM_API_KEY;
+const XUMM_API_SECRET = process.env.XUMM_API_SECRET;
+if (!XUMM_API_KEY || !XUMM_API_SECRET) {
+  console.error('❌ 請在 .env 中設定 XUMM_API_KEY 與 XUMM_API_SECRET');
+  console.error('   前往 https://apps.xaman.dev/ 建立應用程式以取得憑證');
+  process.exit(1);
+}
+
+const sdk = new XummSdk(XUMM_API_KEY, XUMM_API_SECRET);
+console.log('✅ Xumm SDK 初始化完成');
+
+// ============================================================
+//  XRPL Client — 連線至 Testnet
+// ============================================================
+const xrplClient = new xrpl.Client('wss://s.altnet.rippletest.net:51233');
+
+// ============================================================
+//  記憶體索引（取代關聯式資料庫）
+//  txIndex      : Map<itemId, Array<{ txHash, timestamp }>>
+//  pendingMap   : Map<uuid, { itemId, status }>
+// ============================================================
+const txIndex    = new Map();
+const pendingMap = new Map();
+const INDEX_FILE = path.join(__dirname, 'tx-index.json');
+
+function loadIndex() {
+  try {
+    if (fs.existsSync(INDEX_FILE)) {
+      const data = JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8'));
+      for (const [k, v] of Object.entries(data)) txIndex.set(k, v);
+      console.log(`📂 載入索引: ${txIndex.size} 項商品`);
+    }
+  } catch (e) { console.warn('⚠️ 索引載入失敗:', e.message); }
+}
+
+function saveIndex() {
+  try {
+    const obj = {};
+    for (const [k, v] of txIndex) obj[k] = v;
+    fs.writeFileSync(INDEX_FILE, JSON.stringify(obj, null, 2));
+  } catch (e) { console.warn('⚠️ 索引儲存失敗:', e.message); }
+}
+
+// ============================================================
+//  物流接收帳戶 — 所有物流交易的目的地
+// ============================================================
+let logisticsAddress = '';
+
+async function setupLogisticsAccount() {
+  const seed = process.env.LOGISTICS_SEED;
+
+  if (seed) {
+    const wallet = xrpl.Wallet.fromSeed(seed);
+    logisticsAddress = wallet.classicAddress;
+    console.log(`🏦 物流帳戶 (從種子): ${logisticsAddress}`);
+  } else {
+    // 自動生成並從 Testnet Faucet 注資
+    const wallet = xrpl.Wallet.generate();
+    try {
+      const fundResult = await xrplClient.fundWallet(wallet);
+      logisticsAddress = fundResult.wallet.classicAddress;
+      console.log(`🏦 物流帳戶已生成並注資: ${logisticsAddress}`);
+    } catch (e) {
+      console.error('❌ 無法從 Faucet 取得測試 XRP:', e.message);
+      console.error('   請至 https://testnet.xrpl.org/faucet 手動注資');
+      throw e;
+    }
+  }
+
+  // 驗證帳戶是否已啟用
+  try {
+    const ai = await xrplClient.request({
+      command: 'account_info', account: logisticsAddress, ledger_index: 'validated'
+    });
+    const bal = xrpl.dropsToXrp(ai.result.account_data.Balance);
+    console.log(`💰 物流帳戶餘額: ${bal} XRP`);
+  } catch {
+    console.warn(`⚠️ 物流帳戶 ${logisticsAddress} 尚未啟用，請先注資`);
+  }
+}
+
+// ============================================================
+//  API 路由
+// ============================================================
+
+// GET /api/health
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok', network: 'xrpl-testnet', logisticsAddress, trackedItems: txIndex.size });
+});
+
+// ─── 登入 ─────────────────────────────────────────────────
+
+// POST /api/auth  — 建立 Xaman SignIn Payload
+app.post('/api/auth', async (_req, res) => {
+  try {
+    const payload = await sdk.payload.create({ TransactionType: 'SignIn' });
+    res.json({
+      uuid: payload.uuid,
+      qrCode: payload.refs.qr_png,
+      url: payload.next.always
+    });
+  } catch (err) {
+    console.error('❌ Auth 建立失敗:', err.message);
+    res.status(500).json({ error: '無法建立登入 Payload', detail: err.message });
+  }
+});
+
+// GET /api/auth/:uuid  — 輪詢登入結果
+app.get('/api/auth/:uuid', async (req, res) => {
+  try {
+    const p = await sdk.payload.get(req.params.uuid);
+    if (p.meta.signed)
+      return res.json({ signed: true, account: p.response.account, userToken: p.response.user_token ?? null });
+    if (p.meta.expired)
+      return res.json({ signed: false, expired: true });
+    res.json({ signed: false, expired: false });
+  } catch (err) {
+    res.status(500).json({ error: '查詢登入狀態失敗', detail: err.message });
+  }
+});
+
+// ─── 物流更新 ────────────────────────────────────────────
+
+// POST /api/logistics/update  — 建立 Xaman 簽章 Payload
+app.post('/api/logistics/update', async (req, res) => {
+  try {
+    const { itemId, status, location } = req.body;
+    if (!itemId || !status)
+      return res.status(400).json({ error: '缺少必要欄位 itemId / status' });
+    if (!['produced', 'shipped', 'sold'].includes(status))
+      return res.status(400).json({ error: 'status 須為 produced / shipped / sold' });
+
+    const memoData = {
+      type: 'eggtrack/item-status', v: 1,
+      itemId: itemId.trim(),
+      status,
+      timestamp: new Date().toISOString(),
+      location: (location || '').trim()
+    };
+
+    const payload = await sdk.payload.create({
+      TransactionType: 'Payment',
+      Destination: logisticsAddress,
+      Amount: '1',
+      Memos: [{ Memo: { MemoType: toHex('eggtrack/item-status'), MemoData: toHex(JSON.stringify(memoData)) } }]
+    });
+
+    pendingMap.set(payload.uuid, { itemId: itemId.trim(), status });
+    console.log(`📦 Payload 已建立: itemId=${itemId} status=${status} uuid=${payload.uuid}`);
+
+    res.json({ uuid: payload.uuid, qrCode: payload.refs.qr_png, url: payload.next.always });
+  } catch (err) {
+    console.error('❌ 物流 Payload 建立失敗:', err.message);
+    res.status(500).json({ error: '無法建立物流更新', detail: err.message });
+  }
+});
+
+// GET /api/payload/:uuid  — 通用 Payload 輪詢
+app.get('/api/payload/:uuid', async (req, res) => {
+  try {
+    const p = await sdk.payload.get(req.params.uuid);
+    if (p.meta.signed && p.response.txid) {
+      const info = pendingMap.get(req.params.uuid) || {};
+      const txHash = p.response.txid;
+
+      if (info.itemId) {
+        if (!txIndex.has(info.itemId)) txIndex.set(info.itemId, []);
+        txIndex.get(info.itemId).push({ txHash, timestamp: new Date().toISOString() });
+        saveIndex();
+        console.log(`✅ 交易入帳: itemId=${info.itemId} status=${info.status} tx=${txHash.slice(0,12)}...`);
+      }
+      pendingMap.delete(req.params.uuid);
+      return res.json({ signed: true, txHash, itemId: info.itemId, account: p.response.account });
+    }
+    if (p.meta.expired) {
+      pendingMap.delete(req.params.uuid);
+      return res.json({ signed: false, expired: true });
+    }
+    res.json({ signed: false, expired: false });
+  } catch (err) {
+    res.status(500).json({ error: '查詢 Payload 狀態失敗', detail: err.message });
+  }
+});
+
+// ─── 查詢 ─────────────────────────────────────────────────
+
+// GET /api/logistics/:itemId  — 從 XRPL 取得歷史紀錄並回傳時間軸
+app.get('/api/logistics/:itemId', async (req, res) => {
+  try {
+    const itemId = req.params.itemId;
+    const entries = txIndex.get(itemId) || [];
+
+    if (entries.length === 0)
+      return res.json({ itemId, currentStatus: 'unknown', totalEvents: 0, transactions: [] });
+
+    const transactions = [];
+    for (const entry of entries) {
+      try {
+        const txRes = await xrplClient.request({
+          command: 'tx', transaction: entry.txHash, binary: false
+        });
+        const tx = txRes.result;
+        const txJson = tx.tx_json || tx;
+        if (!txJson.Memos) continue;
+
+        for (const mw of txJson.Memos) {
+          try {
+            const memoType = fromHex(mw.Memo.MemoType);
+            if (memoType !== 'eggtrack/item-status') continue;
+            const data = JSON.parse(fromHex(mw.Memo.MemoData));
+
+            transactions.push({
+              txHash: entry.txHash,
+              status: data.status,
+              timestamp: data.timestamp,
+              ledgerTimestamp: txJson.date ? txDateToISO(txJson.date) : data.timestamp,
+              location: data.location || '',
+              handler: txJson.Account,
+              ledgerIndex: tx.ledger_index
+            });
+          } catch { /* 跳過無法解析的 Memo */ }
+        }
+      } catch { /* 交易可能尚未驗證 */ }
+    }
+
+    transactions.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    const currentStatus = transactions.length > 0 ? transactions.at(-1).status : 'unknown';
+
+    res.json({ itemId, currentStatus, totalEvents: transactions.length, transactions });
+  } catch (err) {
+    console.error('❌ 查詢失敗:', err.message);
+    res.status(500).json({ error: '查詢失敗', detail: err.message });
+  }
+});
+
+// ============================================================
+//  啟動伺服器
+// ============================================================
+async function main() {
+  await xrplClient.connect();
+  console.log('🔗 已連線 XRPL Testnet');
+
+  await setupLogisticsAccount();
+  loadIndex();
+
+  app.listen(PORT, () => {
+    console.log(`\n🚀 雞蛋產銷履歷系統啟動完成`);
+    console.log(`   消費者查詢: http://localhost:${PORT}/?itemId=EGG001`);
+    console.log(`   物流管理頁: http://localhost:${PORT}/admin.html`);
+    console.log(`   API 健康檢查: http://localhost:${PORT}/api/health\n`);
+  });
+}
+
+main().catch(err => { console.error('💥 啟動失敗:', err); process.exit(1); });
