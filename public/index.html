@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🥚 雞蛋產銷履歷 - 區塊鏈溯源</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans TC", sans-serif;
+      background: #f0f4f0; color: #222; line-height: 1.6;
+    }
+    .container { max-width: 720px; margin: 0 auto; padding: 16px; }
+
+    /* Header */
+    header {
+      background: linear-gradient(135deg, #2E7D32, #43A047);
+      color: #fff; padding: 28px 20px 20px; text-align: center;
+      border-radius: 0 0 24px 24px; margin-bottom: 20px;
+    }
+    header h1 { font-size: 1.6rem; margin-bottom: 4px; }
+    header p  { font-size: 0.9rem; opacity: .85; }
+
+    /* Card */
+    .card {
+      background: #fff; border-radius: 14px; padding: 20px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.07); margin-bottom: 16px;
+    }
+
+    /* Item Search */
+    .search-row {
+      display: flex; gap: 10px;
+    }
+    .search-row input {
+      flex: 1; padding: 12px 14px; border: 2px solid #ddd;
+      border-radius: 10px; font-size: 1rem; outline: none;
+      transition: border-color .2s;
+    }
+    .search-row input:focus { border-color: #43A047; }
+    .search-row button {
+      padding: 12px 24px; background: #2E7D32; color: #fff;
+      border: none; border-radius: 10px; font-size: 1rem; cursor: pointer;
+      transition: background .2s; white-space: nowrap;
+    }
+    .search-row button:hover { background: #1B5E20; }
+    .search-row button:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* Status Badge */
+    .status-bar {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 16px; background: #f9fdf9; border-radius: 10px;
+      border: 1px solid #e0f0e0;
+    }
+    .status-item-id { font-weight: 700; font-size: 1.1rem; }
+    .status-badge {
+      display: inline-block; padding: 4px 14px; border-radius: 20px;
+      font-size: .85rem; font-weight: 600; color: #fff; margin-left: auto;
+    }
+
+    /* Loading */
+    .loading { text-align: center; padding: 40px 0; color: #888; }
+    .spinner {
+      display: inline-block; width: 36px; height: 36px;
+      border: 3px solid #e0e0e0; border-top-color: #43A047;
+      border-radius: 50%; animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Empty / Error */
+    .empty-state { text-align: center; padding: 40px 0; color: #999; font-size: 1.1rem; }
+    .error-state { text-align: center; padding: 20px; color: #c62828; background: #ffebee; border-radius: 10px; }
+
+    /* ── Timeline ────────────────────────────────── */
+    .timeline { position: relative; padding-left: 32px; }
+    .timeline::before {
+      content: ''; position: absolute; left: 14px; top: 6px; bottom: 6px;
+      width: 2px; background: #e0e0e0;
+    }
+    .tl-event { position: relative; margin-bottom: 24px; }
+    .tl-event:last-child { margin-bottom: 0; }
+    .tl-dot {
+      position: absolute; left: -22px; top: 6px;
+      width: 14px; height: 14px; border-radius: 50%;
+      background: #ccc; border: 3px solid #ccc;
+      transition: all .3s;
+    }
+    .tl-event.active .tl-dot {
+      width: 18px; height: 18px; left: -24px; top: 4px;
+      box-shadow: 0 0 0 4px rgba(76,175,80,.15);
+    }
+    .tl-card {
+      background: #f9f9f9; border-radius: 10px; padding: 14px 16px;
+      border: 1px solid #eee; transition: border-color .2s;
+    }
+    .tl-event.active .tl-card { border-color: #c8e6c9; background: #fafffa; }
+    .tl-status  { font-weight: 700; font-size: 1rem; margin-bottom: 4px; }
+    .tl-meta    { display: flex; flex-wrap: wrap; gap: 10px; font-size: .85rem; color: #666; margin-bottom: 6px; }
+    .tl-footer  { display: flex; justify-content: space-between; align-items: center; font-size: .8rem; color: #999; }
+    .tl-handler { font-family: monospace; }
+    .tx-link    { color: #1565C0; text-decoration: none; }
+    .tx-link:hover { text-decoration: underline; }
+
+    /* Responsive */
+    @media (max-width: 480px) {
+      header h1 { font-size: 1.3rem; }
+      .search-row { flex-direction: column; }
+      .search-row button { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🥚 雞蛋產銷履歷</h1>
+    <p>區塊鏈 x 食品安全 — 每筆紀錄都不可篡改</p>
+  </header>
+
+  <div class="container">
+    <!-- 搜尋 -->
+    <div class="card">
+      <div class="search-row">
+        <input type="text" id="itemInput" placeholder="輸入商品 ID，例如 EGG001" />
+        <button id="searchBtn">🔍 查詢</button>
+      </div>
+    </div>
+
+    <!-- 狀態列 -->
+    <div class="card status-bar" id="statusBar" style="display:none">
+      <span class="status-item-id" id="itemIdDisplay"></span>
+      <span class="status-badge" id="statusBadge"></span>
+      <span style="font-size:.85rem;color:#888" id="eventCount"></span>
+    </div>
+
+    <!-- 載入中 -->
+    <div class="card loading" id="loading" style="display:none">
+      <div class="spinner"></div>
+      <p style="margin-top:12px">正在從 XRPL 查詢資料…</p>
+    </div>
+
+    <!-- 錯誤 -->
+    <div id="errorMsg" style="display:none"></div>
+
+    <!-- 時間軸 -->
+    <div class="card" id="resultCard" style="display:none">
+      <h3 style="margin-bottom:16px;font-size:1rem;color:#555">📋 物流時間軸</h3>
+      <div id="timeline"></div>
+    </div>
+
+    <!-- 初次提示 -->
+    <div class="card" id="welcome">
+      <div style="text-align:center;padding:30px 0;color:#888">
+        <p style="font-size:2rem;margin-bottom:10px">📱</p>
+        <p>掃描雞蛋包裝上的 NFC 標籤</p>
+        <p style="font-size:.85rem;margin-top:6px">或輸入上方商品 ID 查詢</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+    // ── 從 URL 取得 itemId ──────────────────────────────
+    const params = new URLSearchParams(location.search);
+    const initialItemId = params.get('itemId');
+    if (initialItemId) {
+      $('itemInput').value = initialItemId;
+      queryItem(initialItemId);
+    }
+
+    // ── 事件綁定 ────────────────────────────────────────
+    $('searchBtn').addEventListener('click', () => {
+      const val = $('itemInput').value.trim();
+      if (val) queryItem(val);
+    });
+    $('itemInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter') $('searchBtn').click();
+    });
+
+    // ── 查詢 ────────────────────────────────────────────
+    async function queryItem(itemId) {
+      const statusBar = $('statusBar');
+      const resultCard = $('resultCard');
+      const loading = $('loading');
+      const errorMsg = $('errorMsg');
+      const welcome = $('welcome');
+
+      // Reset UI
+      welcome.style.display = 'none';
+      statusBar.style.display = 'none';
+      resultCard.style.display = 'none';
+      errorMsg.style.display = 'none';
+      loading.style.display = 'block';
+
+      try {
+        const data = await api('GET', `/api/logistics/${encodeURIComponent(itemId)}`);
+        loading.style.display = 'none';
+
+        // Status bar
+        $('itemIdDisplay').textContent = `🔖 ${data.itemId}`;
+        $('eventCount').textContent = `共 ${data.totalEvents} 筆紀錄`;
+
+        const badge = $('statusBadge');
+        if (data.currentStatus && data.currentStatus !== 'unknown') {
+          badge.textContent = STATUS_LABELS[data.currentStatus] || data.currentStatus;
+          badge.style.background = STATUS_COLORS[data.currentStatus] || '#999';
+        } else {
+          badge.textContent = '❓ 未知';
+          badge.style.background = '#999';
+        }
+        statusBar.style.display = 'flex';
+        resultCard.style.display = 'block';
+
+        renderTimeline('timeline', data.transactions);
+      } catch (err) {
+        loading.style.display = 'none';
+        errorMsg.style.display = 'block';
+        errorMsg.className = 'card error-state';
+        errorMsg.innerHTML = `❌ ${err.message}`;
+      }
+    }
+  </script>
+</body>
+</html>
