@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>物流管理 - 雞蛋產銷履歷</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans TC", sans-serif;
+      background: #f0f4f0; color: #222; line-height: 1.6;
+    }
+    .container { max-width: 640px; margin: 0 auto; padding: 16px; }
+
+    header {
+      background: linear-gradient(135deg, #1565C0, #1E88E5);
+      color: #fff; padding: 28px 20px 20px; text-align: center;
+      border-radius: 0 0 24px 24px; margin-bottom: 20px;
+    }
+    header h1 { font-size: 1.5rem; }
+    header p  { font-size: .85rem; opacity: .85; }
+
+    .card {
+      background: #fff; border-radius: 14px; padding: 20px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.07); margin-bottom: 16px;
+    }
+    .card-title {
+      font-size: 1rem; font-weight: 700; margin-bottom: 14px; color: #333;
+    }
+
+    /* 登入 */
+    .login-section { text-align: center; padding: 20px 0; }
+    .login-btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 14px 32px; background: #1565C0; color: #fff;
+      border: none; border-radius: 12px; font-size: 1rem; cursor: pointer;
+      transition: background .2s;
+    }
+    .login-btn:hover { background: #0D47A1; }
+    .login-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* QR */
+    .qr-area { display: none; text-align: center; padding: 12px 0; }
+    .qr-wrapper { display: inline-block; padding: 16px; background: #fff; border-radius: 12px; }
+    .qr-img { width: 220px; height: 220px; image-rendering: pixelated; }
+    .qr-hint { margin-top: 10px; font-size: .9rem; color: #666; }
+    .qr-link  { display: inline-block; margin-top: 6px; font-size: .85rem; color: #1565C0; }
+    .qr-uuid  { margin-top: 6px; font-size: .75rem; color: #aaa; font-family: monospace; }
+
+    /* 使用者資訊 */
+    .user-info {
+      display: flex; align-items: center; gap: 12px; padding: 12px 0;
+    }
+    .user-avatar {
+      width: 44px; height: 44px; border-radius: 50%;
+      background: #e3f2fd; display: flex; align-items: center; justify-content: center;
+      font-size: 1.4rem;
+    }
+    .user-address { font-family: monospace; font-size: .85rem; color: #666; word-break: break-all; }
+
+    /* 表單 */
+    .form-group { margin-bottom: 14px; }
+    .form-group label { display: block; font-weight: 600; font-size: .9rem; margin-bottom: 4px; color: #444; }
+    .form-group input, .form-group select {
+      width: 100%; padding: 10px 12px; border: 2px solid #ddd;
+      border-radius: 8px; font-size: .95rem; outline: none; transition: border-color .2s;
+    }
+    .form-group input:focus, .form-group select:focus { border-color: #1E88E5; }
+
+    .submit-btn {
+      width: 100%; padding: 12px; background: #2E7D32; color: #fff;
+      border: none; border-radius: 10px; font-size: 1rem; cursor: pointer;
+      transition: background .2s;
+    }
+    .submit-btn:hover { background: #1B5E20; }
+    .submit-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* 成功訊息 */
+    .success-msg {
+      padding: 14px; background: #e8f5e9; border-radius: 10px;
+      border: 1px solid #c8e6c9; margin-top: 12px;
+    }
+    .error-msg {
+      padding: 14px; background: #ffebee; border-radius: 10px;
+      border: 1px solid #ffcdd2; color: #c62828; margin-top: 12px;
+    }
+
+    /* 歷史 */
+    .history-item {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 0; border-bottom: 1px solid #f0f0f0; font-size: .85rem;
+    }
+    .history-item:last-child { border-bottom: none; }
+    .history-item .h-status { font-weight: 600; }
+    .history-item .h-time  { color: #888; }
+    .tx-link { color: #1565C0; text-decoration: none; font-family: monospace; font-size: .8rem; }
+    .tx-link:hover { text-decoration: underline; }
+
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>📋 物流管理系統</h1>
+    <p>使用 Xaman 錢包登入以更新區塊鏈狀態</p>
+  </header>
+
+  <div class="container">
+    <!-- ─── 登入區 ──────────────────────────────────── -->
+    <div class="card" id="loginCard">
+      <div class="card-title">🔐 身分驗證</div>
+      <div class="login-section" id="loginSection">
+        <button class="login-btn" id="loginBtn">📱 使用 Xaman 錢包登入</button>
+      </div>
+      <div class="qr-area" id="authQR"></div>
+    </div>
+
+    <!-- ─── 管理區 (登入後) ──────────────────────────── -->
+    <div id="adminSection" class="hidden">
+      <!-- 使用者資訊 -->
+      <div class="card">
+        <div class="card-title">👤 物流人員</div>
+        <div class="user-info">
+          <div class="user-avatar">🧑‍🌾</div>
+          <div>
+            <div style="font-weight:600">已連線 Xaman</div>
+            <div class="user-address" id="userAddress">—</div>
+          </div>
+          <button id="logoutBtn" style="margin-left:auto;padding:6px 16px;background:#eee;border:none;border-radius:8px;cursor:pointer;font-size:.8rem">登出</button>
+        </div>
+      </div>
+
+      <!-- 更新表單 -->
+      <div class="card">
+        <div class="card-title">📤 更新物流狀態</div>
+        <form id="updateForm" autocomplete="off">
+          <div class="form-group">
+            <label for="itemId">商品 ID</label>
+            <input type="text" id="itemId" placeholder="例如 EGG001" required />
+          </div>
+          <div class="form-group">
+            <label for="status">狀態</label>
+            <select id="status">
+              <option value="produced">📦 生產完成</option>
+              <option value="shipped">🚚 運送中</option>
+              <option value="sold">🏪 已上架銷售</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="location">地點 (選填)</label>
+            <input type="text" id="location" placeholder="例如 台北養雞場" />
+          </div>
+          <button type="submit" class="submit-btn" id="updateBtn">✍️ 簽署並寫入 XRPL</button>
+        </form>
+
+        <div class="qr-area" id="updateQR"></div>
+        <div id="updateResult"></div>
+      </div>
+
+      <!-- 歷史紀錄 -->
+      <div class="card" id="historyCard">
+        <div class="card-title">📜 本次登入更新記錄</div>
+        <div id="historyList">
+          <div style="text-align:center;color:#aaa;padding:10px">尚無更新紀錄</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+    // ── 狀態 ──────────────────────────────────────────────
+    let isLoggedIn = false;
+    let userXRPLAddress = '';
+    let pollingInterval = null;
+    let history = [];
+
+    // ── DOM ──────────────────────────────────────────────
+    const loginCard     = $('loginCard');
+    const loginSection  = $('loginSection');
+    const loginBtn      = $('loginBtn');
+    const authQR        = $('authQR');
+    const adminSection  = $('adminSection');
+    const userAddress   = $('userAddress');
+    const logoutBtn     = $('logoutBtn');
+    const updateForm    = $('updateForm');
+    const updateBtn     = $('updateBtn');
+    const updateQR      = $('updateQR');
+    const updateResult  = $('updateResult');
+    const historyList   = $('historyList');
+    const statusSelect  = $('status');
+
+    // ── 登入流程 ──────────────────────────────────────────
+    loginBtn.addEventListener('click', async () => {
+      loginBtn.disabled = true;
+      loginBtn.textContent = '⏳ 產生登入請求中…';
+
+      try {
+        const data = await api('POST', '/api/auth');
+        showQR('authQR', data);
+        loginSection.style.display = 'none';
+
+        // 開始輪詢
+        pollingInterval = pollPayload(data.uuid, {
+          onSigned: (res) => {
+            hideQR('authQR');
+            userXRPLAddress = res.account;
+            onLoginSuccess(res.account);
+          },
+          onExpired: () => {
+            hideQR('authQR');
+            loginSection.style.display = 'block';
+            loginBtn.disabled = false;
+            loginBtn.textContent = '📱 使用 Xaman 錢包登入';
+            alert('⚠️ 登入逾時，請重新嘗試');
+          },
+          onPending: () => {
+            // 可顯示等待動畫
+          }
+        });
+      } catch (err) {
+        loginBtn.disabled = false;
+        loginBtn.textContent = '📱 使用 Xaman 錢包登入';
+        alert('❌ ' + err.message);
+      }
+    });
+
+    function onLoginSuccess(account) {
+      isLoggedIn = true;
+      userAddress.textContent = `XRPL 地址: ${account}`;
+      loginCard.style.display = 'none';
+      adminSection.classList.remove('hidden');
+      updateResult.innerHTML = '<div class="success-msg">✅ 已成功使用 Xaman 登入</div>';
+      setTimeout(() => updateResult.innerHTML = '', 3000);
+    }
+
+    // ── 登出 ──────────────────────────────────────────────
+    logoutBtn.addEventListener('click', () => {
+      isLoggedIn = false;
+      userXRPLAddress = '';
+      history = [];
+      adminSection.classList.add('hidden');
+      loginCard.style.display = 'block';
+      loginSection.style.display = 'block';
+      loginBtn.disabled = false;
+      loginBtn.textContent = '📱 使用 Xaman 錢包登入';
+      hideQR('authQR');
+      historyList.innerHTML = '<div style="text-align:center;color:#aaa;padding:10px">尚無更新紀錄</div>';
+    });
+
+    // ── 物流更新 ──────────────────────────────────────────
+    updateForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!isLoggedIn) { alert('請先登入'); return; }
+
+      const itemId   = $('itemId').value.trim();
+      const status   = statusSelect.value;
+      const location = $('location').value.trim();
+
+      if (!itemId) { alert('請輸入商品 ID'); return; }
+
+      updateBtn.disabled = true;
+      updateBtn.textContent = '⏳ 建立 Payload…';
+      updateResult.innerHTML = '';
+
+      try {
+        const data = await api('POST', '/api/logistics/update', { itemId, status, location });
+        showQR('updateQR', data);
+        updateBtn.textContent = '⌛ 等待簽名…';
+
+        // 開始輪詢
+        pollingInterval = pollPayload(data.uuid, {
+          onSigned: (res) => {
+            hideQR('updateQR');
+            updateBtn.disabled = false;
+            updateBtn.textContent = '✍️ 簽署並寫入 XRPL';
+
+            updateResult.innerHTML = `
+              <div class="success-msg">
+                ✅ 更新成功！<br/>
+                🆔 ${itemId} → ${STATUS_LABELS[status]}<br/>
+                🔗 ${xrplLink(res.txHash, '在 Testnet Explorer 檢視')}
+              </div>`;
+
+            // 加入歷史
+            history.unshift({ itemId, status, txHash: res.txHash, time: new Date().toISOString() });
+            renderHistory();
+            $('itemId').value = '';
+          },
+          onExpired: () => {
+            hideQR('updateQR');
+            updateBtn.disabled = false;
+            updateBtn.textContent = '✍️ 簽署並寫入 XRPL';
+            updateResult.innerHTML = '<div class="error-msg">⚠️ 簽署逾時，請重新提交</div>';
+          }
+        });
+      } catch (err) {
+        updateBtn.disabled = false;
+        updateBtn.textContent = '✍️ 簽署並寫入 XRPL';
+        updateResult.innerHTML = `<div class="error-msg">❌ ${err.message}</div>`;
+      }
+    });
+
+    // ── 渲染歷史 ──────────────────────────────────────────
+    function renderHistory() {
+      if (history.length === 0) {
+        historyList.innerHTML = '<div style="text-align:center;color:#aaa;padding:10px">尚無更新紀錄</div>';
+        return;
+      }
+      historyList.innerHTML = history.map(h => `
+        <div class="history-item">
+          <div>
+            <span class="h-status" style="color:${STATUS_COLORS[h.status]||'#333'}">${STATUS_LABELS[h.status]||h.status}</span>
+            <span style="color:#888;margin-left:8px">${h.itemId}</span>
+          </div>
+          <div style="text-align:right">
+            <div class="h-time">${formatDate(h.time)}</div>
+            <div>${xrplLink(h.txHash, '🔗 交易')}</div>
+          </div>
+        </div>
+      `).join('');
+    }
+  </script>
+</body>
+</html>
