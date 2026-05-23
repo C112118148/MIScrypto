@@ -24,6 +24,10 @@ app.use(express.static('public'));
 // ============================================================
 const toHex   = str => Buffer.from(str, 'utf8').toString('hex').toUpperCase();
 const fromHex = hex => Buffer.from(hex, 'hex').toString('utf8');
+// 產生純 ASCII JSON — 非 ASCII 字元轉成 \uXXXX，避免 XRPL Explorer 解碼亂碼
+const jsonToHex = obj => toHex(JSON.stringify(obj).replace(/[\u{0080}-\u{10FFFF}]/gu, c =>
+  '\\u' + c.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')
+));
 
 const XRPL_EPOCH_OFFSET = 946684800; // 秒數: 2000-01-01 00:00:00 UTC
 const txDateToISO = rippleSec =>
@@ -176,7 +180,7 @@ app.post('/api/logistics/update', async (req, res) => {
       TransactionType: 'Payment',
       Destination: logisticsAddress,
       Amount: '1',
-      Memos: [{ Memo: { MemoType: toHex('eggtrack/item-status'), MemoData: toHex(JSON.stringify(memoData)) } }]
+      Memos: [{ Memo: { MemoType: toHex('eggtrack/item-status'), MemoData: jsonToHex(memoData) } }]
     });
 
     pendingMap.set(payload.uuid, { itemId: itemId.trim(), status });
@@ -218,6 +222,35 @@ app.get('/api/payload/:uuid', async (req, res) => {
 
 // ─── 查詢 ─────────────────────────────────────────────────
 
+// GET /api/debug/tx/:txHash  — 檢查原始 MemoData hex（除錯用）
+app.get('/api/debug/tx/:txHash', async (req, res) => {
+  try {
+    const txRes = await xrplClient.request({
+      command: 'tx', transaction: req.params.txHash, binary: false
+    });
+    const tx = txRes.result;
+    tx.logisticsAddress = logisticsAddress;
+
+    // 解析每個 Memo，回傳 hex 與 decoded 版本
+    const memos = [];
+    for (const mw of (tx.tx_json?.Memos || tx.Memos || [])) {
+      const memoTypeHex = mw.Memo.MemoType || '';
+      const memoDataHex = mw.Memo.MemoData || '';
+      let memoTypeDecoded = '', memoDataDecoded = '';
+      try { memoTypeDecoded = fromHex(memoTypeHex); } catch {}
+      try { memoDataDecoded = fromHex(memoDataHex); } catch {}
+      memos.push({
+        MemoType: { hex: memoTypeHex, decoded: memoTypeDecoded },
+        MemoData: { hex: memoDataHex, decoded: memoDataDecoded, length: { hexChars: memoDataHex.length, bytes: memoDataHex.length / 2 } }
+      });
+    }
+
+    res.json({ txHash: req.params.txHash, account: tx.Account, memos });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/logistics/:itemId  — 從 XRPL 取得歷史紀錄並回傳時間軸
 app.get('/api/logistics/:itemId', async (req, res) => {
   try {
@@ -241,7 +274,10 @@ app.get('/api/logistics/:itemId', async (req, res) => {
           try {
             const memoType = fromHex(mw.Memo.MemoType);
             if (memoType !== 'eggtrack/item-status') continue;
-            const data = JSON.parse(fromHex(mw.Memo.MemoData));
+            // 安全解析 JSON — 忽略尾部多餘的 bytes（Xumm/XRPL 序列化可能附加的亂碼）
+            const raw = fromHex(mw.Memo.MemoData);
+            const braceEnd = raw.lastIndexOf('}');
+            const data = JSON.parse(braceEnd !== -1 ? raw.slice(0, braceEnd + 1) : raw);
 
             transactions.push({
               txHash: entry.txHash,
