@@ -364,22 +364,19 @@ app.get('/api/debug/tx/:txHash', async (req, res) => {
 app.get('/api/logistics/:itemId', async (req, res) => {
   try {
     const itemId = req.params.itemId;
-    let entries = txIndex.get(itemId) || [];
-
-    // 如果記憶體索引找不到，去鏈上掃最新資料再試一次
-    if (entries.length === 0) {
-      const before = txIndex.size;
-      await buildIndex();
-      if (txIndex.size > before) { // 確實有新的資料進來了
-        entries = txIndex.get(itemId) || [];
-      }
-    }
+    const entries = txIndex.get(itemId) || [];
 
     if (entries.length === 0)
       return res.json({ itemId, currentStatus: 'unknown', totalEvents: 0, transactions: [] });
 
     const transactions = [];
+    const seenTx = new Set(); // 🟢 新增：用來記錄已經處理過的 txHash
+
     for (const entry of entries) {
+      // 🟢 新增：如果這個 txHash 已經處理過，就直接跳過，防止重複渲染
+      if (seenTx.has(entry.txHash)) continue;
+      seenTx.add(entry.txHash);
+
       try {
         const txRes = await xrplClient.request({
           command: 'tx', transaction: entry.txHash, binary: false
@@ -392,10 +389,14 @@ app.get('/api/logistics/:itemId', async (req, res) => {
           try {
             const memoType = fromHex(mw.Memo.MemoType);
             if (memoType !== 'eggtrack/item-status') continue;
-            // 安全解析 JSON — 忽略尾部多餘的 bytes（Xumm/XRPL 序列化可能附加的亂碼）
+
+            // 安全解析 JSON
             const raw = fromHex(mw.Memo.MemoData);
             const braceEnd = raw.lastIndexOf('}');
             const data = JSON.parse(braceEnd !== -1 ? raw.slice(0, braceEnd + 1) : raw);
+
+            // 🟢 新增：二次確認 Memo 裡的 itemId 是我們要找的
+            if (data.itemId !== itemId) continue;
 
             const role = data.role || getRoleByAddress(txJson.Account) || '';
             transactions.push({
@@ -405,7 +406,7 @@ app.get('/api/logistics/:itemId', async (req, res) => {
               ledgerTimestamp: txJson.date ? txDateToISO(txJson.date) : data.timestamp,
               location: data.location || '',
               handler: txJson.Account,
-              role,           // 製造商 / 物流中心 / 零售商
+              role,
               roleLabel: ROLE_LABELS[role] || '',
               roleEmoji: EMOJI_ROLE[role] || '',
               ledgerIndex: tx.ledger_index
@@ -415,9 +416,11 @@ app.get('/api/logistics/:itemId', async (req, res) => {
       } catch { /* 交易可能尚未驗證 */ }
     }
 
+    // 依時間排序
     transactions.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
     const currentStatus = transactions.length > 0 ? transactions.at(-1).status : 'unknown';
 
+    // 重新計算去重複後的事件總數
     res.json({ itemId, currentStatus, totalEvents: transactions.length, transactions });
   } catch (err) {
     console.error('❌ 查詢失敗:', err.message);

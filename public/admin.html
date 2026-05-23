@@ -2,8 +2,12 @@
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>物流管理 - 雞蛋產銷履歷</title>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -31,7 +35,7 @@
     /* 登入 */
     .login-section { text-align: center; padding: 20px 0; }
     .login-btn {
-      display: inline-flex; align-items: center; gap: 8px;
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
       padding: 14px 32px; background: #1565C0; color: #fff;
       border: none; border-radius: 12px; font-size: 1rem; cursor: pointer;
       transition: background .2s;
@@ -48,9 +52,7 @@
     .qr-uuid  { margin-top: 6px; font-size: .75rem; color: #aaa; font-family: monospace; }
 
     /* 使用者資訊 */
-    .user-info {
-      display: flex; align-items: center; gap: 12px; padding: 12px 0;
-    }
+    .user-info { display: flex; align-items: center; gap: 12px; padding: 12px 0; }
     .user-avatar {
       width: 44px; height: 44px; border-radius: 50%;
       background: #e3f2fd; display: flex; align-items: center; justify-content: center;
@@ -60,53 +62,105 @@
 
     /* 表單 */
     .form-group { margin-bottom: 14px; }
-    .form-group label { display: block; font-weight: 600; font-size: .9rem; margin-bottom: 4px; color: #444; }
+    .form-group label { display: block; font-weight: 600; font-size: .9rem; margin-bottom: 8px; color: #444; }
     .form-group input, .form-group select {
-      width: 100%; padding: 10px 12px; border: 2px solid #ddd;
-      border-radius: 8px; font-size: .95rem; outline: none; transition: border-color .2s;
+      width: 100%; padding: 12px; border: 2px solid #ddd;
+      border-radius: 8px; font-size: 1rem; outline: none; transition: border-color .2s;
     }
     .form-group input:focus, .form-group select:focus { border-color: #1E88E5; }
 
+    /* 掃描輸入區塊 - 桌面版排版 */
+    .input-with-btn { display: flex; gap: 8px; }
+    .input-with-btn input { flex: 1; }
+    .action-btn {
+      padding: 12px 20px; background: #E3F2FD; color: #1565C0;
+      border: 2px solid #BBDEFB; border-radius: 8px; cursor: pointer; white-space: nowrap;
+      font-weight: 600; font-size: 1rem; display: flex; align-items: center; gap: 6px; transition: all 0.2s;
+    }
+    .action-btn:hover { background: #BBDEFB; }
+
+    /* 正在掃描時的按鈕狀態 */
+    .action-btn.scanning {
+      background: #ffebee; color: #c62828; border-color: #ffcdd2;
+    }
+
     .submit-btn {
-      width: 100%; padding: 12px; background: #2E7D32; color: #fff;
-      border: none; border-radius: 10px; font-size: 1rem; cursor: pointer;
-      transition: background .2s;
+      width: 100%; padding: 14px; background: #2E7D32; color: #fff;
+      border: none; border-radius: 10px; font-size: 1.1rem; cursor: pointer;
+      transition: background .2s; font-weight: 600;
     }
     .submit-btn:hover { background: #1B5E20; }
-    .submit-btn:disabled { opacity: .5; cursor: not-allowed; }
+    .submit-btn:disabled { background: #9E9E9E; cursor: not-allowed; }
 
-    /* 成功訊息 */
-    .success-msg {
-      padding: 14px; background: #e8f5e9; border-radius: 10px;
-      border: 1px solid #c8e6c9; margin-top: 12px;
-    }
-    .error-msg {
-      padding: 14px; background: #ffebee; border-radius: 10px;
-      border: 1px solid #ffcdd2; color: #c62828; margin-top: 12px;
-    }
+    /* 訊息與歷史 */
+    .success-msg { padding: 14px; background: #e8f5e9; border-radius: 10px; border: 1px solid #c8e6c9; margin-top: 12px; }
+    .error-msg { padding: 14px; background: #ffebee; border-radius: 10px; border: 1px solid #ffcdd2; color: #c62828; margin-top: 12px; }
+    .info-msg { font-size: 0.9rem; color: #1565C0; margin-top: 8px; display: block; line-height: 1.4; }
 
-    /* 歷史 */
-    .history-item {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 10px 0; border-bottom: 1px solid #f0f0f0; font-size: .85rem;
-    }
+    .history-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #f0f0f0; font-size: .9rem; }
     .history-item:last-child { border-bottom: none; }
     .history-item .h-status { font-weight: 600; }
-    .history-item .h-time  { color: #888; }
+    .history-item .h-time  { color: #888; font-size: 0.8rem; }
     .tx-link { color: #1565C0; text-decoration: none; font-family: monospace; font-size: .8rem; }
     .tx-link:hover { text-decoration: underline; }
+    .hidden { display: none !important; }
 
-    .hidden { display: none; }
+    /* ========================================================
+       ✨ Html5QrcodeScanner 掃描器介面深度美化
+       ======================================================== */
+    #reader {
+      width: 100%; border-radius: 12px; overflow: hidden; margin-top: 12px;
+      display: none; border: 2px dashed #1E88E5 !important; background: #fafafa;
+    }
+    /* 隱藏預設醜標籤 */
+    #reader__dashboard_section_csr span { font-size: 0.9rem !important; color: #555 !important; }
+    /* 美化內部按鈕 */
+    #reader button {
+      background-color: #1565C0 !important; color: #fff !important;
+      border: none !important; padding: 10px 20px !important;
+      border-radius: 8px !important; font-size: 1rem !important;
+      font-weight: 600 !important; cursor: pointer; margin: 8px !important;
+    }
+    #reader__scan_region video {
+      border-radius: 10px !important; object-fit: cover;
+    }
+    #reader a { color: #1E88E5 !important; text-decoration: none !important; }
+    #reader__dashboard_section_swaplink { display: none !important; }
+
+    /* ========================================================
+       📱 手機版排版優化 (Mobile First)
+       ======================================================== */
+    @media (max-width: 480px) {
+      .input-with-btn {
+        flex-direction: column; /* 將輸入框和按鈕改為上下排列 */
+      }
+      .input-with-btn input {
+        width: 100%; font-size: 1.1rem; padding: 14px;
+      }
+      .action-btn {
+        width: 100%; justify-content: center; padding: 14px; font-size: 1.1rem;
+      }
+    }
+
+    /* 列印專用 CSS */
+    @media print {
+      body * { visibility: hidden; }
+      #printWrapper, #printWrapper * { visibility: visible; }
+      #printWrapper {
+        position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+        display: flex !important; flex-direction: column; align-items: center; justify-content: center;
+      }
+      .no-print { display: none !important; }
+    }
   </style>
 </head>
 <body>
-  <header>
+  <header class="no-print">
     <h1>📋 物流管理系統</h1>
     <p>使用 Xaman 錢包登入以更新區塊鏈狀態</p>
   </header>
 
-  <div class="container">
-    <!-- ─── 登入區 ──────────────────────────────────── -->
+  <div class="container no-print">
     <div class="card" id="loginCard">
       <div class="card-title">🔐 身分驗證</div>
       <div class="login-section" id="loginSection">
@@ -115,9 +169,7 @@
       <div class="qr-area" id="authQR"></div>
     </div>
 
-    <!-- ─── 管理區 (登入後) ──────────────────────────── -->
     <div id="adminSection" class="hidden">
-      <!-- 使用者資訊 -->
       <div class="card">
         <div class="card-title">👤 物流人員</div>
         <div class="user-info">
@@ -127,39 +179,65 @@
             <div class="user-address" id="userAddress">—</div>
             <div id="userRoleBadge" style="font-size:.85rem;margin-top:2px"></div>
           </div>
-          <button id="logoutBtn" style="margin-left:auto;padding:6px 16px;background:#eee;border:none;border-radius:8px;cursor:pointer;font-size:.8rem">登出</button>
+          <button id="logoutBtn" style="margin-left:auto;padding:8px 16px;background:#eee;border:none;border-radius:8px;cursor:pointer;font-size:.9rem;font-weight:600;">登出</button>
         </div>
       </div>
 
-      <!-- 更新表單 -->
       <div class="card">
         <div class="card-title">📤 更新物流狀態</div>
         <form id="updateForm" autocomplete="off">
           <div class="form-group">
             <label for="itemId">商品 ID</label>
-            <input type="text" id="itemId" placeholder="例如 EGG001" required />
+            <div class="input-with-btn">
+              <input type="text" id="itemId" placeholder="手動輸入，或使用下方按鈕掃描" required />
+              <button type="button" class="action-btn" id="scanBtn">📷 掃描條碼</button>
+            </div>
+
+            <!-- 掃描畫面容器 -->
+            <div id="reader"></div>
+
+            <span id="statusHint" class="info-msg"></span>
           </div>
+
           <div class="form-group" id="statusGroup">
-            <label for="status">狀態</label>
-            <select id="status">
+            <label for="status">狀態 (依序更新)</label>
+            <select id="status" disabled>
+              <option value="">-- 請先輸入或掃描商品 ID --</option>
               <option value="produced">📦 生產完成 (🏭 製造商)</option>
               <option value="shipped">🚚 運送中 (🚚 物流中心)</option>
               <option value="sold">🏪 已上架銷售 (🏪 零售商)</option>
             </select>
           </div>
+
           <div class="form-group">
             <label for="location">地點 (選填)</label>
             <input type="text" id="location" placeholder="例如 台北養雞場" />
           </div>
-          <div id="signerHelp" style="font-size:.85rem;color:#888;margin-bottom:10px"></div>
-          <button type="submit" class="submit-btn" id="updateBtn">✍️ 簽署並寫入 XRPL</button>
+
+          <div id="signerHelp" style="font-size:.85rem;color:#888;margin-bottom:12px"></div>
+          <button type="submit" class="submit-btn" id="updateBtn" disabled>✍️ 簽署並寫入 XRPL</button>
         </form>
 
         <div class="qr-area" id="updateQR"></div>
         <div id="updateResult"></div>
       </div>
 
-      <!-- 歷史紀錄 -->
+      <div class="card">
+        <div class="card-title">🖨️ 商品 QR 標籤列印</div>
+        <div class="form-group">
+          <label>產生商品 ID 的 QR Code</label>
+          <div class="input-with-btn">
+            <input type="text" id="printInputId" placeholder="例如 EGG001" />
+            <button type="button" class="action-btn" id="generatePrintBtn" style="background:#f0f0f0;color:#333;border-color:#ccc;">產生</button>
+          </div>
+        </div>
+        <div id="printPreview" class="hidden" style="text-align: center; padding: 16px; background: #fafafa; border-radius: 8px; border: 1px dashed #ccc; margin-top: 10px;">
+          <div id="qrCodeCanvas" style="display:inline-block; margin-bottom: 10px;"></div>
+          <div id="qrCodeLabel" style="font-weight: bold; font-size: 1.4rem; font-family: monospace; letter-spacing: 2px;"></div>
+          <button type="button" class="login-btn" id="triggerPrintBtn" style="width: 100%; margin-top: 12px;">🖨️ 列印此標籤</button>
+        </div>
+      </div>
+
       <div class="card" id="historyCard">
         <div class="card-title">📜 本次登入更新記錄</div>
         <div id="historyList">
@@ -169,19 +247,32 @@
     </div>
   </div>
 
+  <div id="printWrapper" class="hidden">
+    <div id="printTarget" style="text-align:center;"></div>
+    <div id="printTargetLabel" style="font-weight:bold; font-size: 32px; font-family: monospace; margin-top: 15px; letter-spacing: 2px;"></div>
+  </div>
+
   <script src="app.js"></script>
   <script>
-    // ── 狀態 ──────────────────────────────────────────────
+    // ── 變數與狀態 ──────────────────────────────────────────
     let isLoggedIn = false;
     let userXRPLAddress = '';
-    let userRole = '';           // 目前登入者的角色 (manufacturer/logistics/retailer)
-    let userRoleLabel = '';      // 顯示用標籤
-    let allowedStatuses = [];    // 這個角色可以做的 status
-    let rolesConfig = {};        // 從 server 取得的角色設定
+    let userRole = '';
+    let userRoleLabel = '';
+    let allowedStatuses = [];
+    let rolesConfig = {};
     let pollingInterval = null;
     let history = [];
+    let html5QrcodeScanner = null;
 
-    // ── DOM ──────────────────────────────────────────────
+    const NEXT_STATUS_MAP = {
+      'unknown': 'produced',
+      'produced': 'shipped',
+      'shipped': 'sold',
+      'sold': null
+    };
+
+    // ── DOM 元件 ──────────────────────────────────────────
     const loginCard     = $('loginCard');
     const loginSection  = $('loginSection');
     const loginBtn      = $('loginBtn');
@@ -190,149 +281,216 @@
     const userAddress   = $('userAddress');
     const userRoleBadge = $('userRoleBadge');
     const logoutBtn     = $('logoutBtn');
+
     const updateForm    = $('updateForm');
     const updateBtn     = $('updateBtn');
     const updateQR      = $('updateQR');
     const updateResult  = $('updateResult');
     const historyList   = $('historyList');
+
+    const itemIdInput   = $('itemId');
     const statusSelect  = $('status');
-    const statusGroup   = $('statusGroup');
+    const statusHint    = $('statusHint');
     const signerHelp    = $('signerHelp');
 
-    // ── 啟動時載入角色設定 ──────────────────────────────────
+    const scanBtn       = $('scanBtn');
+    const readerDiv     = $('reader');
+
+    const printInputId     = $('printInputId');
+    const generatePrintBtn = $('generatePrintBtn');
+    const printPreview     = $('printPreview');
+    const triggerPrintBtn  = $('triggerPrintBtn');
+
+    // ── 啟動載入 ──────────────────────────────────────────
     (async () => {
       try { rolesConfig = (await api('GET', '/api/roles')).roles; } catch {}
     })();
 
     // ── 登入流程 ──────────────────────────────────────────
     loginBtn.addEventListener('click', async () => {
-      loginBtn.disabled = true;
-      loginBtn.textContent = '⏳ 產生登入請求中…';
-
+      loginBtn.disabled = true; loginBtn.textContent = '⏳ 產生登入請求中…';
       try {
         const data = await api('POST', '/api/auth');
         showQR('authQR', data);
         loginSection.style.display = 'none';
 
-        // 開始輪詢
         pollingInterval = pollPayload(data.uuid, {
           onSigned: (res) => {
             hideQR('authQR');
-            userXRPLAddress = res.account;
             onLoginSuccess(res.account);
           },
           onExpired: () => {
-            hideQR('authQR');
-            loginSection.style.display = 'block';
-            loginBtn.disabled = false;
-            loginBtn.textContent = '📱 使用 Xaman 錢包登入';
+            hideQR('authQR'); loginSection.style.display = 'block';
+            loginBtn.disabled = false; loginBtn.textContent = '📱 使用 Xaman 錢包登入';
             alert('⚠️ 登入逾時，請重新嘗試');
-          },
-          onPending: () => {
-            // 可顯示等待動畫
           }
         });
       } catch (err) {
-        loginBtn.disabled = false;
-        loginBtn.textContent = '📱 使用 Xaman 錢包登入';
+        loginBtn.disabled = false; loginBtn.textContent = '📱 使用 Xaman 錢包登入';
         alert('❌ ' + err.message);
       }
     });
 
     function onLoginSuccess(account) {
-      isLoggedIn = true;
-      userXRPLAddress = account;
+      isLoggedIn = true; userXRPLAddress = account;
       userAddress.textContent = `XRPL 地址: ${account}`;
 
-      // 判斷登入者角色 (支援多地址)
-      userRole = '';
-      userRoleLabel = '';
-      allowedStatuses = ['produced', 'shipped', 'sold'];
-      const badge = $('userRoleBadge');
-      const avatar = $('userAvatar');
+      userRole = ''; userRoleLabel = ''; allowedStatuses = ['produced', 'shipped', 'sold'];
+      const badge = $('userRoleBadge'), avatar = $('userAvatar');
+
       for (const [role, cfg] of Object.entries(rolesConfig)) {
         if (cfg.configured && cfg.addresses && cfg.addresses.includes(account)) {
-          userRole = role;
-          userRoleLabel = cfg.label;
+          userRole = role; userRoleLabel = cfg.label;
           allowedStatuses = [role === 'manufacturer' ? 'produced' : role === 'logistics' ? 'shipped' : 'sold'];
-          badge.innerHTML = `✅ ${cfg.emoji} ${cfg.label}`;
-          badge.style.color = '#2E7D32';
+          badge.innerHTML = `✅ ${cfg.emoji} ${cfg.label}`; badge.style.color = '#2E7D32';
           avatar.textContent = cfg.emoji;
           break;
         }
       }
       if (!userRole) {
-        // 未註冊的錢包也能登入，但只能操作無角色限制的步驟
-        const anyConfigured = Object.values(rolesConfig).some(c => c.configured);
-        if (anyConfigured) {
-          badge.innerHTML = '⚠️ 此錢包未綁定任何角色，無法簽署';
-          badge.style.color = '#c62828';
-          allowedStatuses = [];
+        if (Object.values(rolesConfig).some(c => c.configured)) {
+          badge.innerHTML = '⚠️ 未綁定角色，無法更新'; badge.style.color = '#c62828'; allowedStatuses = [];
         } else {
-          badge.innerHTML = '🔓 無角色限制 (任何錢包均可簽署)';
-          badge.style.color = '#888';
+          badge.innerHTML = '🔓 無限制測試模式'; badge.style.color = '#888';
         }
       }
 
-      // 篩選可用的 status 選項
-      const statusOpts = statusSelect.options;
-      for (let i = 0; i < statusOpts.length; i++) {
-        const opt = statusOpts[i];
-        if (allowedStatuses.length === 0) {
-          opt.disabled = true;
-        } else {
-          opt.disabled = !allowedStatuses.includes(opt.value);
-        }
-      }
-      if (allowedStatuses.length > 0 && !allowedStatuses.includes(statusSelect.value)) {
-        statusSelect.value = allowedStatuses[0];
-      }
+      signerHelp.textContent = userRole ? `您正以 ${ROLE_EMOJI[userRole]||''} ${userRoleLabel} 身分操作` : (allowedStatuses.length ? '💰 可簽署所有步驟' : '⚠️ 無權限');
 
-      // 提示文字
-      if (userRole) {
-        signerHelp.textContent = `你正在以 ${ROLE_EMOJI[userRole] || ''} ${userRoleLabel} 身分操作`;
-      } else if (allowedStatuses.length === 0) {
-        signerHelp.textContent = '⚠️ 你的錢包沒有綁定任何角色，無法更新物流狀態';
-      } else {
-        signerHelp.textContent = '💰 此錢包可簽署所有步驟';
-      }
-
-      loginCard.style.display = 'none';
-      adminSection.classList.remove('hidden');
-      updateResult.innerHTML = '<div class="success-msg">✅ 已成功使用 Xaman 登入</div>';
-      setTimeout(() => updateResult.innerHTML = '', 3000);
+      loginCard.style.display = 'none'; adminSection.classList.remove('hidden');
     }
 
     // ── 登出 ──────────────────────────────────────────────
     logoutBtn.addEventListener('click', () => {
-      isLoggedIn = false;
-      userXRPLAddress = '';
-      userRole = '';
-      userRoleLabel = '';
-      allowedStatuses = [];
-      history = [];
-      adminSection.classList.add('hidden');
-      loginCard.style.display = 'block';
-      loginSection.style.display = 'block';
-      loginBtn.disabled = false;
-      loginBtn.textContent = '📱 使用 Xaman 錢包登入';
-      hideQR('authQR');
-      historyList.innerHTML = '<div style="text-align:center;color:#aaa;padding:10px">尚無更新紀錄</div>';
+      isLoggedIn = false; adminSection.classList.add('hidden');
+      loginCard.style.display = 'block'; loginSection.style.display = 'block';
+      loginBtn.disabled = false; loginBtn.textContent = '📱 使用 Xaman 錢包登入';
+      if (html5QrcodeScanner) { html5QrcodeScanner.clear(); readerDiv.style.display = 'none'; }
     });
 
-    // ── 物流更新 ──────────────────────────────────────────
+    // ── 掃描器功能 (手機優化版) ───────────────────────────
+    scanBtn.addEventListener('click', () => {
+      if (readerDiv.style.display === 'block') {
+        if (html5QrcodeScanner) html5QrcodeScanner.clear();
+        readerDiv.style.display = 'none';
+        scanBtn.textContent = '📷 掃描條碼';
+        scanBtn.classList.remove('scanning');
+        return;
+      }
+
+      readerDiv.style.display = 'block';
+      scanBtn.textContent = '❌ 取消掃描';
+      scanBtn.classList.add('scanning');
+
+      // 動態計算掃描框大小 (佔畫面 70%)
+      const qrboxFunction = function(viewfinderWidth, viewfinderHeight) {
+          let minEdgeSize = Math.min(viewfinderWidth, viewfinderHeight);
+          let qrboxSize = Math.floor(minEdgeSize * 0.7);
+          return { width: qrboxSize, height: qrboxSize };
+      }
+
+      html5QrcodeScanner = new Html5QrcodeScanner("reader", {
+        fps: 10,
+        qrbox: qrboxFunction,
+        // 強制優先使用手機的後置鏡頭
+        videoConstraints: { facingMode: "environment" }
+      }, false);
+
+      html5QrcodeScanner.render((decodedText) => {
+        itemIdInput.value = decodedText;
+        html5QrcodeScanner.clear();
+        readerDiv.style.display = 'none';
+        scanBtn.textContent = '📷 掃描條碼';
+        scanBtn.classList.remove('scanning');
+
+        validateItemState(decodedText);
+      }, (error) => {});
+    });
+
+    // ── 實體掃描槍支援 (攔截 Enter) ───────────────────────
+    itemIdInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        validateItemState(e.target.value);
+      }
+    });
+
+    itemIdInput.addEventListener('blur', (e) => validateItemState(e.target.value));
+
+    async function validateItemState(itemId) {
+      itemId = itemId.trim();
+      if (!itemId) {
+        statusSelect.disabled = true; updateBtn.disabled = true;
+        statusHint.textContent = ''; return;
+      }
+
+      statusHint.innerHTML = '🔄 <span style="color:#1565C0">查詢鏈上狀態中...</span>';
+      statusSelect.disabled = true;
+      updateBtn.disabled = true;
+
+      try {
+        const res = await api('GET', `/api/logistics/${itemId}`);
+        const currentStatus = res.currentStatus;
+        const nextRequiredStatus = NEXT_STATUS_MAP[currentStatus];
+
+        if (!nextRequiredStatus) {
+          statusHint.innerHTML = '✅ <span style="color:#2E7D32; font-weight:bold;">此商品已完成所有物流階段 (已上架)。</span>';
+          statusSelect.innerHTML = '<option>已結束</option>';
+          return;
+        }
+
+        statusSelect.innerHTML = `
+          <option value="${nextRequiredStatus}" selected>
+            ${STATUS_LABELS[nextRequiredStatus]}
+          </option>
+        `;
+
+        statusHint.innerHTML = `ℹ️ 目前狀態：<b>${currentStatus === 'unknown' ? '尚未生產' : STATUS_LABELS[currentStatus]}</b>。只能進入下一步驟。`;
+
+        if (allowedStatuses.length === 0 || !allowedStatuses.includes(nextRequiredStatus)) {
+          statusHint.innerHTML += `<br/><span style="color:#c62828; font-weight:bold;">⚠️ 您目前的角色無法執行此階段的更新。</span>`;
+        } else {
+          statusSelect.disabled = false;
+          updateBtn.disabled = false;
+        }
+
+      } catch (err) {
+        statusHint.innerHTML = '<span style="color:#c62828;">❌ 查詢失敗，請確認網路或 API。</span>';
+      }
+    }
+
+    // ── 列印 QR Code 功能 ──────────────────────────────────
+    generatePrintBtn.addEventListener('click', () => {
+      const id = printInputId.value.trim();
+      if (!id) { alert('請輸入要列印的商品 ID'); return; }
+
+      $('qrCodeLabel').textContent = id;
+      $('printTargetLabel').textContent = id;
+
+      const canvas1 = $('qrCodeCanvas');
+      const canvas2 = $('printTarget');
+      canvas1.innerHTML = ''; canvas2.innerHTML = '';
+
+      new QRCode(canvas1, { text: id, width: 160, height: 160 });
+      new QRCode(canvas2, { text: id, width: 350, height: 350 });
+
+      printPreview.classList.remove('hidden');
+    });
+
+    triggerPrintBtn.addEventListener('click', () => {
+      window.print();
+    });
+
+    // ── 提交更新 ──────────────────────────────────────────
     updateForm.addEventListener('submit', async (e) => {
       e.preventDefault();
-      if (!isLoggedIn) { alert('請先登入'); return; }
+      if (!isLoggedIn) return;
 
-      const itemId   = $('itemId').value.trim();
-      const status   = statusSelect.value;
+      const itemId = itemIdInput.value.trim();
+      const status = statusSelect.value;
       const location = $('location').value.trim();
 
-      if (!itemId) { alert('請輸入商品 ID'); return; }
-
-      updateBtn.disabled = true;
-      updateBtn.textContent = '⏳ 建立 Payload…';
+      updateBtn.disabled = true; updateBtn.textContent = '⏳ 建立 Payload…';
       updateResult.innerHTML = '';
 
       try {
@@ -340,57 +498,41 @@
         showQR('updateQR', data);
         updateBtn.textContent = '⌛ 等待簽名…';
 
-        // 開始輪詢
         pollingInterval = pollPayload(data.uuid, {
           onSigned: (res) => {
             hideQR('updateQR');
-            updateBtn.disabled = false;
+            updateBtn.disabled = true;
             updateBtn.textContent = '✍️ 簽署並寫入 XRPL';
-
-            updateResult.innerHTML = `
-              <div class="success-msg">
-                ✅ 更新成功！<br/>
-                🆔 ${itemId} → ${STATUS_LABELS[status]}<br/>
-                🔗 ${xrplLink(res.txHash, '在 Testnet Explorer 檢視')}
-              </div>`;
-
-            // 加入歷史
+            updateResult.innerHTML = `<div class="success-msg">✅ 更新成功！<br/>🔗 ${xrplLink(res.txHash, '檢視交易')}</div>`;
             history.unshift({ itemId, status, txHash: res.txHash, time: new Date().toISOString() });
             renderHistory();
-            $('itemId').value = '';
+            itemIdInput.value = '';
+            statusHint.textContent = '';
           },
           onExpired: () => {
-            hideQR('updateQR');
-            updateBtn.disabled = false;
-            updateBtn.textContent = '✍️ 簽署並寫入 XRPL';
-            updateResult.innerHTML = '<div class="error-msg">⚠️ 簽署逾時，請重新提交</div>';
+            hideQR('updateQR'); updateBtn.disabled = false; updateBtn.textContent = '✍️ 簽署並寫入 XRPL';
+            updateResult.innerHTML = '<div class="error-msg">⚠️ 簽署逾時</div>';
           }
         });
       } catch (err) {
-        updateBtn.disabled = false;
-        updateBtn.textContent = '✍️ 簽署並寫入 XRPL';
+        updateBtn.disabled = false; updateBtn.textContent = '✍️ 簽署並寫入 XRPL';
         updateResult.innerHTML = `<div class="error-msg">❌ ${err.message}</div>`;
       }
     });
 
-    // ── 渲染歷史 ──────────────────────────────────────────
     function renderHistory() {
-      if (history.length === 0) {
-        historyList.innerHTML = '<div style="text-align:center;color:#aaa;padding:10px">尚無更新紀錄</div>';
-        return;
-      }
+      if (!history.length) return;
       historyList.innerHTML = history.map(h => `
         <div class="history-item">
           <div>
             <span class="h-status" style="color:${STATUS_COLORS[h.status]||'#333'}">${STATUS_LABELS[h.status]||h.status}</span>
-            <span style="color:#888;margin-left:8px">${h.itemId}</span>
+            <span style="color:#888;margin-left:8px;font-weight:600;">${h.itemId}</span>
           </div>
           <div style="text-align:right">
             <div class="h-time">${formatDate(h.time)}</div>
-            <div>${xrplLink(h.txHash, '🔗 交易')}</div>
+            <div style="margin-top:4px;">${xrplLink(h.txHash, '🔗 交易')}</div>
           </div>
-        </div>
-      `).join('');
+        </div>`).join('');
     }
   </script>
 </body>
