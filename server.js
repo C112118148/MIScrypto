@@ -5,8 +5,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
+
 const xrpl = require('xrpl');
 
 // ----- Xumm SDK -----
@@ -24,6 +23,10 @@ app.use(express.static('public'));
 // ============================================================
 const toHex   = str => Buffer.from(str, 'utf8').toString('hex').toUpperCase();
 const fromHex = hex => Buffer.from(hex, 'hex').toString('utf8');
+// 產生純 ASCII JSON — 非 ASCII 字元轉成 \uXXXX，避免 XRPL Explorer 解碼亂碼
+const jsonToHex = obj => toHex(JSON.stringify(obj).replace(/[\u{0080}-\u{10FFFF}]/gu, c =>
+  '\\u' + c.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')
+));
 
 const XRPL_EPOCH_OFFSET = 946684800; // 秒數: 2000-01-01 00:00:00 UTC
 const txDateToISO = rippleSec =>
@@ -49,30 +52,75 @@ console.log('✅ Xumm SDK 初始化完成');
 const xrplClient = new xrpl.Client('wss://s.altnet.rippletest.net:51233');
 
 // ============================================================
-//  記憶體索引（取代關聯式資料庫）
+//  記憶體索引（不存本機檔案，啟動時從 XRPL 掃描重建）
 //  txIndex      : Map<itemId, Array<{ txHash, timestamp }>>
 //  pendingMap   : Map<uuid, { itemId, status }>
 // ============================================================
 const txIndex    = new Map();
 const pendingMap = new Map();
-const INDEX_FILE = path.join(__dirname, 'tx-index.json');
 
-function loadIndex() {
-  try {
-    if (fs.existsSync(INDEX_FILE)) {
-      const data = JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8'));
-      for (const [k, v] of Object.entries(data)) txIndex.set(k, v);
-      console.log(`📂 載入索引: ${txIndex.size} 項商品`);
+// 啟動時從 XRPL 掃描物流帳戶的所有 incoming 交易，重建索引
+async function buildIndex() {
+  console.log('🔍 正在從 XRPL 掃描歷史交易重建索引…');
+  let marker;
+  let scanned = 0;
+  do {
+    const res = await xrplClient.request({
+      command: 'account_tx',
+      account: logisticsAddress,
+      ledger_index_min: -1,
+      ledger_index_max: -1,
+      limit: 200,
+      marker
+    });
+    for (const txEntry of res.result.transactions) {
+      const tx = txEntry.tx_json || txEntry.tx;
+      if (!tx?.Memos) continue;
+      for (const mw of tx.Memos) {
+        try {
+          if (fromHex(mw.Memo.MemoType) !== 'eggtrack/item-status') continue;
+          const raw = fromHex(mw.Memo.MemoData);
+          const braceEnd = raw.lastIndexOf('}');
+          const data = JSON.parse(braceEnd !== -1 ? raw.slice(0, braceEnd + 1) : raw);
+          if (!data.itemId) continue;
+          if (!txIndex.has(data.itemId)) txIndex.set(data.itemId, []);
+          const role = data.role || getRoleByAddress(tx.Account) || '';
+          txIndex.get(data.itemId).push({ txHash: tx.hash || txEntry.hash, timestamp: data.timestamp, role });
+          scanned++;
+        } catch { /* 跳過無法解析的 Memo */ }
+      }
     }
-  } catch (e) { console.warn('⚠️ 索引載入失敗:', e.message); }
+    marker = res.result.marker;
+  } while (marker);
+  console.log(`📦 索引重建完成: ${txIndex.size} 項商品, ${scanned} 筆交易`);
 }
 
-function saveIndex() {
-  try {
-    const obj = {};
-    for (const [k, v] of txIndex) obj[k] = v;
-    fs.writeFileSync(INDEX_FILE, JSON.stringify(obj, null, 2));
-  } catch (e) { console.warn('⚠️ 索引儲存失敗:', e.message); }
+// ============================================================
+//  多重簽章角色設定 — 每個 status 綁定特定角色錢包地址
+// ============================================================
+// 支援逗號分隔多地址：'rABC...,rXYZ...'
+const ROLE_ADDRESSES = {
+  manufacturer: (process.env.MANUFACTURER_ADDRESS || '').split(',').map(s => s.trim()).filter(Boolean),
+  logistics:    (process.env.LOGISTICS_ADDRESS || '').split(',').map(s => s.trim()).filter(Boolean),
+  retailer:     (process.env.RETAILER_ADDRESS || '').split(',').map(s => s.trim()).filter(Boolean),
+};
+const STATUS_ROLE_MAP = { produced: 'manufacturer', shipped: 'logistics', sold: 'retailer' };
+const ROLE_LABELS    = { manufacturer: '製造商', logistics: '物流中心', retailer: '零售商' };
+const EMOJI_ROLE     = { manufacturer: '🏭',  logistics: '🚚',  retailer: '🏪' };
+
+function getRoleByAddress(address) {
+  if (!address) return null;
+  const addr = address.trim();
+  for (const [role, addrs] of Object.entries(ROLE_ADDRESSES)) {
+    if (addrs.includes(addr)) return role;
+  }
+  return null;
+}
+function getRequiredRoleForStatus(status) {
+  return STATUS_ROLE_MAP[status] || null;
+}
+function isRoleConfigured(role) {
+  return ROLE_ADDRESSES[role] && ROLE_ADDRESSES[role].length > 0;
 }
 
 // ============================================================
@@ -90,6 +138,8 @@ async function setupLogisticsAccount() {
   } else {
     // 自動生成並從 Testnet Faucet 注資
     const wallet = xrpl.Wallet.generate();
+    console.log(`🔑 新物流錢包種子 (分享給全組使用): ${wallet.seed}`);
+    console.log(`   請將 LOGISTICS_SEED=${wallet.seed} 加入大家的 .env`);
     try {
       const fundResult = await xrplClient.fundWallet(wallet);
       logisticsAddress = fundResult.wallet.classicAddress;
@@ -158,29 +208,45 @@ app.get('/api/auth/:uuid', async (req, res) => {
 // POST /api/logistics/update  — 建立 Xaman 簽章 Payload
 app.post('/api/logistics/update', async (req, res) => {
   try {
-    const { itemId, status, location } = req.body;
+    const { itemId, status, location, signerAddress } = req.body;
     if (!itemId || !status)
       return res.status(400).json({ error: '缺少必要欄位 itemId / status' });
     if (!['produced', 'shipped', 'sold'].includes(status))
       return res.status(400).json({ error: 'status 須為 produced / shipped / sold' });
 
+    // 角色驗證：如果該角色已設定錢包地址，簽署者必須是其中一員
+    const requiredRole = getRequiredRoleForStatus(status);
+    if (requiredRole && isRoleConfigured(requiredRole)) {
+      const expectedAddrs = ROLE_ADDRESSES[requiredRole];
+      if (!signerAddress) {
+        return res.status(403).json({ error: `此操作需要 ${ROLE_LABELS[requiredRole]} 簽署，請先登入` });
+      }
+      if (!expectedAddrs.includes(signerAddress.trim())) {
+        return res.status(403).json({
+          error: `簽署者不符 — 這個步驟需要 ${EMOJI_ROLE[requiredRole]} ${ROLE_LABELS[requiredRole]} 的錢包來簽`,
+          expectedRole: requiredRole, expectedAddresses: expectedAddrs
+        });
+      }
+    }
+
     const memoData = {
-      type: 'eggtrack/item-status', v: 1,
+      type: 'eggtrack/item-status', v: 2,
       itemId: itemId.trim(),
       status,
       timestamp: new Date().toISOString(),
-      location: (location || '').trim()
+      location: (location || '').trim(),
+      role: requiredRole || undefined   // 紀錄上鏈，誰簽的這步
     };
 
     const payload = await sdk.payload.create({
       TransactionType: 'Payment',
       Destination: logisticsAddress,
       Amount: '1',
-      Memos: [{ Memo: { MemoType: toHex('eggtrack/item-status'), MemoData: toHex(JSON.stringify(memoData)) } }]
+      Memos: [{ Memo: { MemoType: toHex('eggtrack/item-status'), MemoData: jsonToHex(memoData) } }]
     });
 
-    pendingMap.set(payload.uuid, { itemId: itemId.trim(), status });
-    console.log(`📦 Payload 已建立: itemId=${itemId} status=${status} uuid=${payload.uuid}`);
+    pendingMap.set(payload.uuid, { itemId: itemId.trim(), status, role: requiredRole });
+    console.log(`📦 Payload 已建立: itemId=${itemId} status=${status} role=${requiredRole || 'any'} uuid=${payload.uuid}`);
 
     res.json({ uuid: payload.uuid, qrCode: payload.refs.qr_png, url: payload.next.always });
   } catch (err) {
@@ -200,7 +266,7 @@ app.get('/api/payload/:uuid', async (req, res) => {
       if (info.itemId) {
         if (!txIndex.has(info.itemId)) txIndex.set(info.itemId, []);
         txIndex.get(info.itemId).push({ txHash, timestamp: new Date().toISOString() });
-        saveIndex();
+        // 交易已在 XRPL 上，不存本機檔案；重啟時會從鏈上掃描重建
         console.log(`✅ 交易入帳: itemId=${info.itemId} status=${info.status} tx=${txHash.slice(0,12)}...`);
       }
       pendingMap.delete(req.params.uuid);
@@ -216,7 +282,52 @@ app.get('/api/payload/:uuid', async (req, res) => {
   }
 });
 
+// ─── 角色查詢 ─────────────────────────────────────────────
+
+// GET /api/roles  — 回傳角色設定（給前端顯示用）
+app.get('/api/roles', (_req, res) => {
+  const configured = {};
+  for (const [role, addrs] of Object.entries(ROLE_ADDRESSES)) {
+    configured[role] = {
+      addresses: addrs.length > 0 ? addrs : null,
+      label: ROLE_LABELS[role],
+      emoji: EMOJI_ROLE[role],
+      configured: addrs.length > 0
+    };
+  }
+  res.json({ roles: configured, statusRole: STATUS_ROLE_MAP });
+});
+
 // ─── 查詢 ─────────────────────────────────────────────────
+
+// GET /api/debug/tx/:txHash  — 檢查原始 MemoData hex（除錯用）
+app.get('/api/debug/tx/:txHash', async (req, res) => {
+  try {
+    const txRes = await xrplClient.request({
+      command: 'tx', transaction: req.params.txHash, binary: false
+    });
+    const tx = txRes.result;
+    tx.logisticsAddress = logisticsAddress;
+
+    // 解析每個 Memo，回傳 hex 與 decoded 版本
+    const memos = [];
+    for (const mw of (tx.tx_json?.Memos || tx.Memos || [])) {
+      const memoTypeHex = mw.Memo.MemoType || '';
+      const memoDataHex = mw.Memo.MemoData || '';
+      let memoTypeDecoded = '', memoDataDecoded = '';
+      try { memoTypeDecoded = fromHex(memoTypeHex); } catch {}
+      try { memoDataDecoded = fromHex(memoDataHex); } catch {}
+      memos.push({
+        MemoType: { hex: memoTypeHex, decoded: memoTypeDecoded },
+        MemoData: { hex: memoDataHex, decoded: memoDataDecoded, length: { hexChars: memoDataHex.length, bytes: memoDataHex.length / 2 } }
+      });
+    }
+
+    res.json({ txHash: req.params.txHash, account: tx.Account, memos });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // GET /api/logistics/:itemId  — 從 XRPL 取得歷史紀錄並回傳時間軸
 app.get('/api/logistics/:itemId', async (req, res) => {
@@ -241,8 +352,12 @@ app.get('/api/logistics/:itemId', async (req, res) => {
           try {
             const memoType = fromHex(mw.Memo.MemoType);
             if (memoType !== 'eggtrack/item-status') continue;
-            const data = JSON.parse(fromHex(mw.Memo.MemoData));
+            // 安全解析 JSON — 忽略尾部多餘的 bytes（Xumm/XRPL 序列化可能附加的亂碼）
+            const raw = fromHex(mw.Memo.MemoData);
+            const braceEnd = raw.lastIndexOf('}');
+            const data = JSON.parse(braceEnd !== -1 ? raw.slice(0, braceEnd + 1) : raw);
 
+            const role = data.role || getRoleByAddress(txJson.Account) || '';
             transactions.push({
               txHash: entry.txHash,
               status: data.status,
@@ -250,6 +365,9 @@ app.get('/api/logistics/:itemId', async (req, res) => {
               ledgerTimestamp: txJson.date ? txDateToISO(txJson.date) : data.timestamp,
               location: data.location || '',
               handler: txJson.Account,
+              role,           // 製造商 / 物流中心 / 零售商
+              roleLabel: ROLE_LABELS[role] || '',
+              roleEmoji: EMOJI_ROLE[role] || '',
               ledgerIndex: tx.ledger_index
             });
           } catch { /* 跳過無法解析的 Memo */ }
@@ -275,7 +393,7 @@ async function main() {
   console.log('🔗 已連線 XRPL Testnet');
 
   await setupLogisticsAccount();
-  loadIndex();
+  await buildIndex();
 
   app.listen(PORT, () => {
     console.log(`\n🚀 雞蛋產銷履歷系統啟動完成`);
