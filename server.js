@@ -417,11 +417,17 @@ app.get('/api/logistics/:itemId', async (req, res) => {
               timestamp: data.timestamp,
               ledgerTimestamp: txJson.date ? txDateToISO(txJson.date) : data.timestamp,
               location: data.location || '',
-              handler: txJson.Account,
+
+              // === 👇 新增與確保這幾個欄位有傳遞給前端 ===
+              handler: txJson.Account,              // 發送方 (From)
+              destination: txJson.Destination,      // 接收方 (To)
+              sequence: txJson.Sequence,            // Sequence Number
+              ledgerIndex: tx.ledger_index,         // Ledger Index
+              // =====================================
+
               role,
               roleLabel: ROLE_LABELS[role] || '',
-              roleEmoji: EMOJI_ROLE[role] || '',
-              ledgerIndex: tx.ledger_index
+              roleEmoji: EMOJI_ROLE[role] || ''
             });
           } catch { /* 跳過無法解析的 Memo */ }
         }
