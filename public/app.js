@@ -44,13 +44,22 @@ async function api(method, path, body) {
 
 // ── Xaman Payload 輪詢 ─────────────────────────────────────
 function pollPayload(uuid, callbacks) {
+  let failCount = 0;
+  const MAX_FAILS = 10;
   const interval = setInterval(async () => {
     try {
       const data = await api('GET', `/api/payload/${uuid}`);
+      failCount = 0; // 成功就重置失敗次數
       if (data.signed) { clearInterval(interval); callbacks.onSigned?.(data); }
       else if (data.expired) { clearInterval(interval); callbacks.onExpired?.(data); }
       else callbacks.onPending?.();
-    } catch { /* 靜默重試 */ }
+    } catch {
+      failCount++;
+      if (failCount >= MAX_FAILS) {
+        clearInterval(interval);
+        console.warn(`⏰ Payload ${uuid.slice(0,8)}… 輪詢逾時（連續 ${MAX_FAILS} 次失敗）`);
+      }
+    }
   }, 1500);
   return interval;
 }

@@ -44,23 +44,20 @@ if (!XUMM_API_KEY || !XUMM_API_SECRET) {
   process.exit(1);
 }
 
+const sdk = new XummSdk(XUMM_API_KEY, XUMM_API_SECRET);
+console.log('✅ Xumm SDK 初始化完成');
+
+// Health 端點（放在 routes 前面是因為不依賴 SDK，只依賴連線狀態）
 app.get('/api/health/data', (_req, res) => {
   res.json({ status: 'ok', network: 'xrpl-testnet', logisticsAddress, trackedItems: txIndex.size });
 });
 
-// 2. 當使用者在瀏覽器輸入 /api/health 時，回傳 Health.html 介面
 app.get('/api/health', (req, res) => {
-  // 檢查請求標頭 (Header) 是否包含 text/html，代表是瀏覽器直接瀏覽
   if (req.headers.accept && req.headers.accept.includes('text/html')) {
-    // 回傳網頁介面 (請確保 Health.html 放在 public 資料夾下)
     return res.sendFile(path.join(__dirname, 'public', 'Health.html'));
   }
-
-  // 否則 (例如 Fetch 請求)，回傳原本的 JSON 數據
   res.json({ status: 'ok', network: 'xrpl-testnet', logisticsAddress, trackedItems: txIndex.size });
 });
-const sdk = new XummSdk(XUMM_API_KEY, XUMM_API_SECRET);
-console.log('✅ Xumm SDK 初始化完成');
 
 // ============================================================
 //  XRPL Client — 連線至 Testnet
@@ -152,12 +149,10 @@ async function setupLogisticsAccount() {
     logisticsAddress = wallet.classicAddress;
     console.log(`🏦 物流帳戶 (從種子): ${logisticsAddress}`);
   } else {
-    // 自動生成並從 Testnet Faucet 注資
-    const wallet = xrpl.Wallet.generate();
-    console.log(`🔑 新物流錢包種子 (分享給全組使用): ${wallet.seed}`);
-    console.log(`   請將 LOGISTICS_SEED=${wallet.seed} 加入大家的 .env`);
     try {
-      const fundResult = await xrplClient.fundWallet(wallet);
+      // fundWallet() 不傳參數 — 在所有 xrpl v4 版本都保證可用
+      // 傳入 wallet 參數在部分版本不支援，會產生未注資的幽靈錢包
+      const fundResult = await xrplClient.fundWallet();
       logisticsAddress = fundResult.wallet.classicAddress;
       console.log(`🏦 物流帳戶已生成並注資: ${logisticsAddress}`);
     } catch (e) {
@@ -183,17 +178,21 @@ async function setupLogisticsAccount() {
 //  API 路由
 // ============================================================
 
-// GET /api/health
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', network: 'xrpl-testnet', logisticsAddress, trackedItems: txIndex.size });
-});
-
 // ─── 登入 ─────────────────────────────────────────────────
 
 // POST /api/auth  — 建立 Xaman SignIn Payload
 app.post('/api/auth', async (_req, res) => {
   try {
-    const payload = await sdk.payload.create({ TransactionType: 'SignIn' });
+    // ⚠️ xumm-sdk v1 的 payload.create() 需要包在 { txjson: ... } 裡
+    const payload = await sdk.payload.create({ txjson: { TransactionType: 'SignIn' } });
+    // sdk.payload.create() 可能在 API Key/Secret 錯誤時回傳 null
+    if (!payload) {
+      console.error('❌ Auth 建立失敗: sdk.payload.create() 回傳 null');
+      return res.status(500).json({
+        error: '無法建立登入 Payload',
+        detail: 'Xumm SDK 回傳空值，請檢查 XUMM_API_KEY / XUMM_API_SECRET 是否正確'
+      });
+    }
     res.json({
       uuid: payload.uuid,
       qrCode: payload.refs.qr_png,
@@ -209,6 +208,7 @@ app.post('/api/auth', async (_req, res) => {
 app.get('/api/auth/:uuid', async (req, res) => {
   try {
     const p = await sdk.payload.get(req.params.uuid);
+    if (!p) return res.json({ signed: false, expired: false, error: '查無此 Payload' });
     if (p.meta.signed)
       return res.json({ signed: true, account: p.response.account, userToken: p.response.user_token ?? null });
     if (p.meta.expired)
@@ -269,12 +269,23 @@ app.post('/api/logistics/update', async (req, res) => {
       role: requiredRole || undefined   // 紀錄上鏈，誰簽的這步
     };
 
+    // ⚠️ xumm-sdk v1 的 payload.create() 需要包在 { txjson: ... } 裡
     const payload = await sdk.payload.create({
-      TransactionType: 'Payment',
-      Destination: logisticsAddress,
-      Amount: '1',
-      Memos: [{ Memo: { MemoType: toHex('eggtrack/item-status'), MemoData: jsonToHex(memoData) } }]
+      txjson: {
+        TransactionType: 'Payment',
+        Destination: logisticsAddress,
+        Amount: '1',
+        Memos: [{ Memo: { MemoType: toHex('eggtrack/item-status'), MemoData: jsonToHex(memoData) } }]
+      }
     });
+
+    if (!payload) {
+      console.error('❌ 物流 Payload 建立失敗: sdk.payload.create() 回傳 null');
+      return res.status(500).json({
+        error: '無法建立物流更新 Payload',
+        detail: 'Xumm SDK 回傳空值，請檢查 API Key / Secret 與 Xaman Developer Console 設定'
+      });
+    }
 
     pendingMap.set(payload.uuid, { itemId: itemId.trim(), status, role: requiredRole });
     console.log(`📦 Payload 已建立: itemId=${itemId} status=${status} role=${requiredRole || 'any'} uuid=${payload.uuid}`);
@@ -290,6 +301,7 @@ app.post('/api/logistics/update', async (req, res) => {
 app.get('/api/payload/:uuid', async (req, res) => {
   try {
     const p = await sdk.payload.get(req.params.uuid);
+    if (!p) return res.json({ signed: false, expired: false, error: '查無此 Payload' });
     if (p.meta.signed && p.response.txid) {
       const info = pendingMap.get(req.params.uuid) || {};
       const txHash = p.response.txid;
@@ -423,6 +435,14 @@ app.get('/api/logistics/:itemId', async (req, res) => {
     console.error('❌ 查詢失敗:', err.message);
     res.status(500).json({ error: '查詢失敗', detail: err.message });
   }
+});
+
+// ============================================================
+//  全域錯誤處理中介層（必須放在所有路由之後）
+// ============================================================
+app.use((err, _req, res, _next) => {
+  console.error('💥 未捕捉的錯誤:', err);
+  res.status(500).json({ error: '伺服器內部錯誤', detail: err.message });
 });
 
 // ============================================================
