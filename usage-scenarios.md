@@ -34,7 +34,7 @@ flowchart TD
         H --> I[遍歷每筆 txHash<br>呼叫 XRPL tx API]
         I --> J[解析 Memo 中的 JSON 資料<br>取出 status / timestamp / location / role]
         J --> K[依時間排序、去重複]
-        K --> L[回傳 JSON<br>{ itemId, currentStatus, totalEvents, transactions }]
+        K --> L["回傳 JSON，包含 itemId, currentStatus, totalEvents, transactions"]
     end
     
     L --> M[前端渲染時間軸]
@@ -61,7 +61,7 @@ flowchart TD
     A([物流人員]) --> B[開啟 admin.html]
     B --> C[點擊「📱 使用 Xaman 錢包登入」]
     C --> D[POST /api/auth<br>→ 建立 SignIn Payload]
-    D --> E[Xumm SDK 回傳<br>{ uuid, qrCode, url }]
+    D --> E["Xumm SDK 回傳 uuid, qrCode, url"]
     E --> F[前端顯示 QR Code]
     F --> G[物流人員打開 Xaman App<br>掃描 QR Code]
     G --> H[Xaman App 顯示簽署請求]
@@ -111,7 +111,7 @@ flowchart TD
     C -->|QR 掃描| E[點擊「📷 掃描條碼」<br>→ Html5QrcodeScanner<br>→ 使用後置鏡頭]
     C -->|掃描槍| F[條碼掃描槍輸入後 Enter]
     
-    D --> G[blur 事件觸發<br>validateItemState()]
+    D --> G["blur 事件觸發 validateItemState"]
     E --> G
     F --> G
     
@@ -134,7 +134,7 @@ flowchart TD
     R --> S[（選填）輸入地點]
     S --> T[點擊「✍️ 簽署並寫入 XRPL」]
     
-    T --> U[POST /api/logistics/update<br>{ itemId, status, location, signerAddress }]
+    T --> U["POST /api/logistics/update 送出 itemId, status, location, signerAddress"]
     
     subgraph 後端驗證
         U --> V{角色驗證是否啟用?<br>anyRoleConfigured}
@@ -149,9 +149,9 @@ flowchart TD
     X --> AB([結束 - 403 拒絕])
     Z --> AB
     
-    AA --> AC[構造 MemoData JSON<br>{ type, v, itemId, status,<br>timestamp, location, role }]
+    AA --> AC["構造 MemoData JSON：type, v, itemId, status, timestamp, location, role"]
     AC --> AD[建立 Payment Transaction<br>Destination: logisticsAddress<br>Amount: 1 drop<br>Memo: eggtrack/item-status]
-    AD --> AE[Xumm SDK 建立 Payload<br>回傳 { uuid, qrCode, url }]
+    AD --> AE["Xumm SDK 建立 Payload，回傳 uuid, qrCode, url"]
     
     AE --> AF[前端顯示 QR Code<br>按鈕顯示「⌛ 等待簽名…」]
     AF --> AG{前端輪詢<br>GET /api/payload/:uuid}
@@ -206,7 +206,7 @@ flowchart TD
     J -->|否| K[重新輸入商品 ID]
     K --> C
     J -->|是| L[點擊「🖨️ 列印此標籤」]
-    L --> M[window.print() 觸發]
+    L --> M["window.print 觸發"]
     M --> N[列印專用 CSS #printWrapper 生效<br>body * 設 visibility: hidden]
     N --> O[僅印出 #printWrapper 內容<br>QR Code + 大號商品 ID]
     O --> P[印出實體標籤]
@@ -238,7 +238,7 @@ flowchart TD
     D -->|NO - 開放模式| F[任何 Xaman 錢包都可簽署<br>角色資訊僅供顯示與記錄]
     
     E --> G[物流人員登入<br>取得 XRPL 地址]
-    G --> H[後端 getRoleByAddress()<br>遍歷 ROLE_ADDRESSES<br>比對地址屬於哪個角色]
+    G --> H["後端 getRoleByAddress，遍歷 ROLE_ADDRESSES 比對地址屬於哪個角色"]
     
     H --> I{狀態權限檢查<br>STATUS_ROLE_MAP}
     
@@ -409,11 +409,11 @@ flowchart LR
     A[npm start] --> B[載入 .env 設定]
     B --> C[初始化 Xumm SDK]
     C --> D[連線 XRPL Testnet<br>WebSocket]
-    D --> E[設定物流接收帳戶<br>setupLogisticsAccount()]
+    D --> E["設定物流接收帳戶 setupLogisticsAccount"]
     E --> F{是否指定 LOGISTICS_SEED?}
     F -->|是| G[從種子恢復錢包]
     F -->|否| H[自動生成錢包 + Faucet 注資]
-    G --> I[掃描歷史交易重建索引<br>buildIndex()]
+    G --> I["掃描歷史交易重建索引 buildIndex"]
     H --> I
     I --> J[啟動 Express 伺服器<br>port 3000]
     J --> K[🚀 系統就緒]
