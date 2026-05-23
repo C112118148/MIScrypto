@@ -76,7 +76,6 @@ function pollPayload(uuid, callbacks) {
   const interval = setInterval(async () => {
     try {
       const data = await api('GET', `/api/payload/${uuid}`);
-<<<<<<< HEAD
       failCount = 0; // 成功就重置失敗次數
       if (data.signed) { clearInterval(interval); callbacks.onSigned?.(data); }
       else if (data.expired) { clearInterval(interval); callbacks.onExpired?.(data); }
@@ -87,23 +86,6 @@ function pollPayload(uuid, callbacks) {
         clearInterval(interval);
         console.warn(`⏰ Payload ${uuid.slice(0,8)}… 輪詢逾時（連續 ${MAX_FAILS} 次失敗）`);
       }
-=======
-
-      if (data.signed) {
-        clearInterval(interval);
-        callbacks.onSigned?.(data);
-      }
-      else if (data.expired) {
-        clearInterval(interval);
-        callbacks.onExpired?.(data);
-      }
-      else {
-        callbacks.onPending?.();
-      }
-
-    } catch {
-      // 靜默重試
->>>>>>> d41d122a499b6f4e9c9e8698fa32f70220ca10f2
     }
   }, 1500);
 
