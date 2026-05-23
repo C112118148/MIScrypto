@@ -84,7 +84,8 @@ async function buildIndex() {
           const data = JSON.parse(braceEnd !== -1 ? raw.slice(0, braceEnd + 1) : raw);
           if (!data.itemId) continue;
           if (!txIndex.has(data.itemId)) txIndex.set(data.itemId, []);
-          txIndex.get(data.itemId).push({ txHash: tx.hash || txEntry.hash, timestamp: data.timestamp });
+          const role = data.role || getRoleByAddress(tx.Account) || '';
+          txIndex.get(data.itemId).push({ txHash: tx.hash || txEntry.hash, timestamp: data.timestamp, role });
           scanned++;
         } catch { /* 跳過無法解析的 Memo */ }
       }
@@ -92,6 +93,34 @@ async function buildIndex() {
     marker = res.result.marker;
   } while (marker);
   console.log(`📦 索引重建完成: ${txIndex.size} 項商品, ${scanned} 筆交易`);
+}
+
+// ============================================================
+//  多重簽章角色設定 — 每個 status 綁定特定角色錢包地址
+// ============================================================
+// 支援逗號分隔多地址：'rABC...,rXYZ...'
+const ROLE_ADDRESSES = {
+  manufacturer: (process.env.MANUFACTURER_ADDRESS || '').split(',').map(s => s.trim()).filter(Boolean),
+  logistics:    (process.env.LOGISTICS_ADDRESS || '').split(',').map(s => s.trim()).filter(Boolean),
+  retailer:     (process.env.RETAILER_ADDRESS || '').split(',').map(s => s.trim()).filter(Boolean),
+};
+const STATUS_ROLE_MAP = { produced: 'manufacturer', shipped: 'logistics', sold: 'retailer' };
+const ROLE_LABELS    = { manufacturer: '製造商', logistics: '物流中心', retailer: '零售商' };
+const EMOJI_ROLE     = { manufacturer: '🏭',  logistics: '🚚',  retailer: '🏪' };
+
+function getRoleByAddress(address) {
+  if (!address) return null;
+  const addr = address.trim();
+  for (const [role, addrs] of Object.entries(ROLE_ADDRESSES)) {
+    if (addrs.includes(addr)) return role;
+  }
+  return null;
+}
+function getRequiredRoleForStatus(status) {
+  return STATUS_ROLE_MAP[status] || null;
+}
+function isRoleConfigured(role) {
+  return ROLE_ADDRESSES[role] && ROLE_ADDRESSES[role].length > 0;
 }
 
 // ============================================================
@@ -179,18 +208,34 @@ app.get('/api/auth/:uuid', async (req, res) => {
 // POST /api/logistics/update  — 建立 Xaman 簽章 Payload
 app.post('/api/logistics/update', async (req, res) => {
   try {
-    const { itemId, status, location } = req.body;
+    const { itemId, status, location, signerAddress } = req.body;
     if (!itemId || !status)
       return res.status(400).json({ error: '缺少必要欄位 itemId / status' });
     if (!['produced', 'shipped', 'sold'].includes(status))
       return res.status(400).json({ error: 'status 須為 produced / shipped / sold' });
 
+    // 角色驗證：如果該角色已設定錢包地址，簽署者必須是其中一員
+    const requiredRole = getRequiredRoleForStatus(status);
+    if (requiredRole && isRoleConfigured(requiredRole)) {
+      const expectedAddrs = ROLE_ADDRESSES[requiredRole];
+      if (!signerAddress) {
+        return res.status(403).json({ error: `此操作需要 ${ROLE_LABELS[requiredRole]} 簽署，請先登入` });
+      }
+      if (!expectedAddrs.includes(signerAddress.trim())) {
+        return res.status(403).json({
+          error: `簽署者不符 — 這個步驟需要 ${EMOJI_ROLE[requiredRole]} ${ROLE_LABELS[requiredRole]} 的錢包來簽`,
+          expectedRole: requiredRole, expectedAddresses: expectedAddrs
+        });
+      }
+    }
+
     const memoData = {
-      type: 'eggtrack/item-status', v: 1,
+      type: 'eggtrack/item-status', v: 2,
       itemId: itemId.trim(),
       status,
       timestamp: new Date().toISOString(),
-      location: (location || '').trim()
+      location: (location || '').trim(),
+      role: requiredRole || undefined   // 紀錄上鏈，誰簽的這步
     };
 
     const payload = await sdk.payload.create({
@@ -200,8 +245,8 @@ app.post('/api/logistics/update', async (req, res) => {
       Memos: [{ Memo: { MemoType: toHex('eggtrack/item-status'), MemoData: jsonToHex(memoData) } }]
     });
 
-    pendingMap.set(payload.uuid, { itemId: itemId.trim(), status });
-    console.log(`📦 Payload 已建立: itemId=${itemId} status=${status} uuid=${payload.uuid}`);
+    pendingMap.set(payload.uuid, { itemId: itemId.trim(), status, role: requiredRole });
+    console.log(`📦 Payload 已建立: itemId=${itemId} status=${status} role=${requiredRole || 'any'} uuid=${payload.uuid}`);
 
     res.json({ uuid: payload.uuid, qrCode: payload.refs.qr_png, url: payload.next.always });
   } catch (err) {
@@ -235,6 +280,22 @@ app.get('/api/payload/:uuid', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: '查詢 Payload 狀態失敗', detail: err.message });
   }
+});
+
+// ─── 角色查詢 ─────────────────────────────────────────────
+
+// GET /api/roles  — 回傳角色設定（給前端顯示用）
+app.get('/api/roles', (_req, res) => {
+  const configured = {};
+  for (const [role, addrs] of Object.entries(ROLE_ADDRESSES)) {
+    configured[role] = {
+      addresses: addrs.length > 0 ? addrs : null,
+      label: ROLE_LABELS[role],
+      emoji: EMOJI_ROLE[role],
+      configured: addrs.length > 0
+    };
+  }
+  res.json({ roles: configured, statusRole: STATUS_ROLE_MAP });
 });
 
 // ─── 查詢 ─────────────────────────────────────────────────
@@ -296,6 +357,7 @@ app.get('/api/logistics/:itemId', async (req, res) => {
             const braceEnd = raw.lastIndexOf('}');
             const data = JSON.parse(braceEnd !== -1 ? raw.slice(0, braceEnd + 1) : raw);
 
+            const role = data.role || getRoleByAddress(txJson.Account) || '';
             transactions.push({
               txHash: entry.txHash,
               status: data.status,
@@ -303,6 +365,9 @@ app.get('/api/logistics/:itemId', async (req, res) => {
               ledgerTimestamp: txJson.date ? txDateToISO(txJson.date) : data.timestamp,
               location: data.location || '',
               handler: txJson.Account,
+              role,           // 製造商 / 物流中心 / 零售商
+              roleLabel: ROLE_LABELS[role] || '',
+              roleEmoji: EMOJI_ROLE[role] || '',
               ledgerIndex: tx.ledger_index
             });
           } catch { /* 跳過無法解析的 Memo */ }
