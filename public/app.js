@@ -15,6 +15,10 @@ const STATUS_COLORS = {
 };
 const STATUS_ORDER = ['produced', 'shipped', 'sold'];
 
+// ── 角色對應 ────────────────────────────────────────────────
+const ROLE_LABELS = { manufacturer: '製造商', logistics: '物流中心', retailer: '零售商' };
+const ROLE_EMOJI  = { manufacturer: '🏭',  logistics: '🚚',  retailer: '🏪' };
+
 // ── 工具函式 ────────────────────────────────────────────────
 const formatDate = iso => {
   if (!iso) return '—';
@@ -90,6 +94,9 @@ function renderTimeline(containerId, transactions) {
     const label  = STATUS_LABELS[tx.status] || tx.status;
     const color  = STATUS_COLORS[tx.status] || '#999';
     const isLast = i === transactions.length - 1;
+    const roleDisplay = tx.role
+      ? `${ROLE_EMOJI[tx.role] || ''} ${ROLE_LABELS[tx.role] || tx.role}`
+      : '';
     html += `
       <div class="tl-event ${isLast ? 'active' : ''}">
         <div class="tl-dot" style="background:${color};border-color:${color}"></div>
@@ -100,7 +107,7 @@ function renderTimeline(containerId, transactions) {
             ${tx.location ? `<span>📍 ${tx.location}</span>` : ''}
           </div>
           <div class="tl-footer">
-            <span class="tl-handler">👤 ${tx.handler ? tx.handler.slice(0,12)+'…' : '—'}</span>
+            <span class="tl-handler">${roleDisplay || '👤 ' + (tx.handler ? tx.handler.slice(0,12)+'…' : '—')}</span>
             ${tx.txHash ? xrplLink(tx.txHash, '🔗 檢視交易') : ''}
           </div>
         </div>
