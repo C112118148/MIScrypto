@@ -14,6 +14,7 @@ const { XummSdk } = require('xumm-sdk');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const path = require('path');
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
@@ -43,6 +44,21 @@ if (!XUMM_API_KEY || !XUMM_API_SECRET) {
   process.exit(1);
 }
 
+app.get('/api/health/data', (_req, res) => {
+  res.json({ status: 'ok', network: 'xrpl-testnet', logisticsAddress, trackedItems: txIndex.size });
+});
+
+// 2. 當使用者在瀏覽器輸入 /api/health 時，回傳 Health.html 介面
+app.get('/api/health', (req, res) => {
+  // 檢查請求標頭 (Header) 是否包含 text/html，代表是瀏覽器直接瀏覽
+  if (req.headers.accept && req.headers.accept.includes('text/html')) {
+    // 回傳網頁介面 (請確保 Health.html 放在 public 資料夾下)
+    return res.sendFile(path.join(__dirname, 'public', 'Health.html'));
+  }
+
+  // 否則 (例如 Fetch 請求)，回傳原本的 JSON 數據
+  res.json({ status: 'ok', network: 'xrpl-testnet', logisticsAddress, trackedItems: txIndex.size });
+});
 const sdk = new XummSdk(XUMM_API_KEY, XUMM_API_SECRET);
 console.log('✅ Xumm SDK 初始化完成');
 
@@ -214,17 +230,32 @@ app.post('/api/logistics/update', async (req, res) => {
     if (!['produced', 'shipped', 'sold'].includes(status))
       return res.status(400).json({ error: 'status 須為 produced / shipped / sold' });
 
-    // 角色驗證：如果該角色已設定錢包地址，簽署者必須是其中一員
+    // ── 角色驗證 ──────────────────────────────────────────
+    // 只要有任何角色設定地址，就進入封閉模式：
+    //   - 簽署者必須存在於某一角色的地址列表中
+    //   - 並且該角色必須對應到所選的狀態
     const requiredRole = getRequiredRoleForStatus(status);
-    if (requiredRole && isRoleConfigured(requiredRole)) {
-      const expectedAddrs = ROLE_ADDRESSES[requiredRole];
+    const anyRoleConfigured = Object.values(ROLE_ADDRESSES).some(addrs => addrs.length > 0);
+
+    if (anyRoleConfigured) {
       if (!signerAddress) {
-        return res.status(403).json({ error: `此操作需要 ${ROLE_LABELS[requiredRole]} 簽署，請先登入` });
+        return res.status(403).json({ error: '角色驗證已啟用，請先登入 Xaman 後再操作' });
       }
-      if (!expectedAddrs.includes(signerAddress.trim())) {
+      const signer = signerAddress.trim();
+
+      // 找出這個錢包屬於哪個角色
+      const userRole = getRoleByAddress(signer);
+      if (!userRole) {
         return res.status(403).json({
-          error: `簽署者不符 — 這個步驟需要 ${EMOJI_ROLE[requiredRole]} ${ROLE_LABELS[requiredRole]} 的錢包來簽`,
-          expectedRole: requiredRole, expectedAddresses: expectedAddrs
+          error: '此錢包未綁定任何角色（製造商/物流中心/零售商），無法簽署'
+        });
+      }
+
+      // 檢查該角色是否能做這個狀態
+      if (requiredRole && userRole !== requiredRole) {
+        return res.status(403).json({
+          error: `你的角色是 ${EMOJI_ROLE[userRole]} ${ROLE_LABELS[userRole]}，無法執行「${status}」這個步驟`,
+          yourRole: userRole, requiredRole
         });
       }
     }
@@ -333,7 +364,16 @@ app.get('/api/debug/tx/:txHash', async (req, res) => {
 app.get('/api/logistics/:itemId', async (req, res) => {
   try {
     const itemId = req.params.itemId;
-    const entries = txIndex.get(itemId) || [];
+    let entries = txIndex.get(itemId) || [];
+
+    // 如果記憶體索引找不到，去鏈上掃最新資料再試一次
+    if (entries.length === 0) {
+      const before = txIndex.size;
+      await buildIndex();
+      if (txIndex.size > before) { // 確實有新的資料進來了
+        entries = txIndex.get(itemId) || [];
+      }
+    }
 
     if (entries.length === 0)
       return res.json({ itemId, currentStatus: 'unknown', totalEvents: 0, transactions: [] });
