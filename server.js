@@ -5,8 +5,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
+
 const xrpl = require('xrpl');
 
 // ----- Xumm SDK -----
@@ -53,30 +52,46 @@ console.log('✅ Xumm SDK 初始化完成');
 const xrplClient = new xrpl.Client('wss://s.altnet.rippletest.net:51233');
 
 // ============================================================
-//  記憶體索引（取代關聯式資料庫）
+//  記憶體索引（不存本機檔案，啟動時從 XRPL 掃描重建）
 //  txIndex      : Map<itemId, Array<{ txHash, timestamp }>>
 //  pendingMap   : Map<uuid, { itemId, status }>
 // ============================================================
 const txIndex    = new Map();
 const pendingMap = new Map();
-const INDEX_FILE = path.join(__dirname, 'tx-index.json');
 
-function loadIndex() {
-  try {
-    if (fs.existsSync(INDEX_FILE)) {
-      const data = JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8'));
-      for (const [k, v] of Object.entries(data)) txIndex.set(k, v);
-      console.log(`📂 載入索引: ${txIndex.size} 項商品`);
+// 啟動時從 XRPL 掃描物流帳戶的所有 incoming 交易，重建索引
+async function buildIndex() {
+  console.log('🔍 正在從 XRPL 掃描歷史交易重建索引…');
+  let marker;
+  let scanned = 0;
+  do {
+    const res = await xrplClient.request({
+      command: 'account_tx',
+      account: logisticsAddress,
+      ledger_index_min: -1,
+      ledger_index_max: -1,
+      limit: 200,
+      marker
+    });
+    for (const txEntry of res.result.transactions) {
+      const tx = txEntry.tx_json || txEntry.tx;
+      if (!tx?.Memos) continue;
+      for (const mw of tx.Memos) {
+        try {
+          if (fromHex(mw.Memo.MemoType) !== 'eggtrack/item-status') continue;
+          const raw = fromHex(mw.Memo.MemoData);
+          const braceEnd = raw.lastIndexOf('}');
+          const data = JSON.parse(braceEnd !== -1 ? raw.slice(0, braceEnd + 1) : raw);
+          if (!data.itemId) continue;
+          if (!txIndex.has(data.itemId)) txIndex.set(data.itemId, []);
+          txIndex.get(data.itemId).push({ txHash: tx.hash || txEntry.hash, timestamp: data.timestamp });
+          scanned++;
+        } catch { /* 跳過無法解析的 Memo */ }
+      }
     }
-  } catch (e) { console.warn('⚠️ 索引載入失敗:', e.message); }
-}
-
-function saveIndex() {
-  try {
-    const obj = {};
-    for (const [k, v] of txIndex) obj[k] = v;
-    fs.writeFileSync(INDEX_FILE, JSON.stringify(obj, null, 2));
-  } catch (e) { console.warn('⚠️ 索引儲存失敗:', e.message); }
+    marker = res.result.marker;
+  } while (marker);
+  console.log(`📦 索引重建完成: ${txIndex.size} 項商品, ${scanned} 筆交易`);
 }
 
 // ============================================================
@@ -94,6 +109,8 @@ async function setupLogisticsAccount() {
   } else {
     // 自動生成並從 Testnet Faucet 注資
     const wallet = xrpl.Wallet.generate();
+    console.log(`🔑 新物流錢包種子 (分享給全組使用): ${wallet.seed}`);
+    console.log(`   請將 LOGISTICS_SEED=${wallet.seed} 加入大家的 .env`);
     try {
       const fundResult = await xrplClient.fundWallet(wallet);
       logisticsAddress = fundResult.wallet.classicAddress;
@@ -204,7 +221,7 @@ app.get('/api/payload/:uuid', async (req, res) => {
       if (info.itemId) {
         if (!txIndex.has(info.itemId)) txIndex.set(info.itemId, []);
         txIndex.get(info.itemId).push({ txHash, timestamp: new Date().toISOString() });
-        saveIndex();
+        // 交易已在 XRPL 上，不存本機檔案；重啟時會從鏈上掃描重建
         console.log(`✅ 交易入帳: itemId=${info.itemId} status=${info.status} tx=${txHash.slice(0,12)}...`);
       }
       pendingMap.delete(req.params.uuid);
@@ -311,7 +328,7 @@ async function main() {
   console.log('🔗 已連線 XRPL Testnet');
 
   await setupLogisticsAccount();
-  loadIndex();
+  await buildIndex();
 
   app.listen(PORT, () => {
     console.log(`\n🚀 雞蛋產銷履歷系統啟動完成`);
