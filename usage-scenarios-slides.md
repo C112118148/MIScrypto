@@ -103,6 +103,38 @@ flowchart TD
 
 ---
 
+## 物流人員操作流程（橫版）
+
+```mermaid
+flowchart LR
+    classDef user fill:#E3F2FD,stroke:#1565C0,color:#0D47A1,stroke-width:3px,rx:12px,ry:12px
+    classDef action fill:#FFF3E0,stroke:#F9A825,color:#E65100,stroke-width:3px
+    classDef system fill:#E8F5E9,stroke:#2E7D32,color:#1B5E20,stroke-width:3px
+    classDef data fill:#E0F2F1,stroke:#00695C,color:#004D40,stroke-width:3px
+    classDef decision fill:#F3E5F5,stroke:#7B1FA2,color:#4A148C,stroke-width:3px
+    classDef startend fill:#ECEFF1,stroke:#546E7A,color:#263238,stroke-width:3px,rx:20px,ry:20px
+
+    A(["👤 物流人員"]):::user
+    A --> B["💻 開啟 admin.html<br>Xaman 錢包登入"]:::action
+    B --> C["📱 Xaman App<br>掃描 QR 簽署"]:::user
+    C --> D["⚙️ 後端驗證<br>判定角色"]:::system
+    D --> E["📋 管理後台"]:::action
+
+    E --> F{"選擇功能"}:::decision
+
+    F -->|"更新狀態"| G1["💻 輸入商品 ID<br>系統帶入下一步"]:::action
+    G1 --> G2["📱 Xaman App<br>掃碼簽署交易"]:::user
+    G2 --> G3["⚙️ 寫入 XRPL<br>物流紀錄上鏈"]:::system
+    G3 --> G4(["🗄️ XRPL Memo<br>永久保存"]):::data
+    G4 --> G5["💻 顯示 ✅ 成功"]:::action
+    G5 --> E
+
+    F -->|"列印標籤"| H1["💻 輸入商品 ID<br>產生 QR Code"]:::action
+    H1 --> H2(["🖨️ 列印標籤"]):::system
+    H2 --> H3(["👤 貼在包裝上"]):::user
+    H3 --> E
+```
+
 ## 角色權限驗證
 
 ```mermaid
