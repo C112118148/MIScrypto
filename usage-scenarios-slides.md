@@ -39,9 +39,8 @@ flowchart TD
     classDef decision fill:#F3E5F5,stroke:#7B1FA2,color:#4A148C,stroke-width:3px
     classDef startend fill:#ECEFF1,stroke:#546E7A,color:#263238,stroke-width:3px,rx:20px,ry:20px
 
-    START(["🚪 開始"]):::startend
-
-    START --> LOGIN1["💻 開啟 admin.html<br>點擊 Xaman 錢包登入"]:::action
+    A(["👤 物流人員"]):::user
+    A --> LOGIN1["💻 開啟 admin.html<br>點擊 Xaman 錢包登入"]:::action
     LOGIN1 --> LOGIN2["📱 Xaman App<br>掃描 QR Code 簽署"]:::user
     LOGIN2 --> LOGIN3["⚙️ 後端驗證帳戶<br>判定角色身份"]:::system
     LOGIN3 --> DASH["📋 進入管理後台"]:::action
@@ -92,7 +91,6 @@ flowchart TD
     classDef data fill:#E0F2F1,stroke:#00695C,color:#004D40,stroke-width:3px
     classDef startend fill:#ECEFF1,stroke:#546E7A,color:#263238,stroke-width:3px,rx:20px,ry:20px
 
-    START(["🚪 開始"]):::startend
     A(["👤 消費者"]):::user
     B["💻 輸入商品 ID<br>或掃描包裝 QR Code"]:::action
     C["⚙️ 後端向 XRPL<br>查詢歷史交易紀錄"]:::system
@@ -100,7 +98,7 @@ flowchart TD
     E["💻 前端顯示時間軸<br>📦生產 → 🚚運送 → 🏪上架"]:::action
     END(["🏁 查詢完成"]):::startend
 
-    START --> A --> B --> C --> D --> E --> END
+    A --> B --> C --> D --> E --> END
 ```
 
 ---
