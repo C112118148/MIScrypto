@@ -177,9 +177,12 @@ function renderTimeline(containerId, transactions) {
       tx.txHash ===
       '483198631D03000DA31C43128FAB95DC2502E48F2A8776CEFB6D26D79204E62F';
 
-    const displayTime = isTargetTx
-      ? 'May 23, 2026 at 7:06:40 AM UTC'
+    const rawTime = isTargetTx
+      ? '2026-05-23T07:06:40.000Z'
       : tx.ledgerTimestamp;
+
+    // 統一透過檔案上方的 formatDate 函式進行格式化
+    const displayTime = formatDate(rawTime);
 
     const displayLedger = isTargetTx
       ? '17610924'
@@ -213,6 +216,8 @@ function renderTimeline(containerId, transactions) {
               ${tx.roleEmoji || '📦'}
               ${tx.roleLabel || '未指定'}
             </span>
+            <span class="tl-location">📍 ${tx.location || '新北市三重區'}</span>
+            <span class="tl-time">🕒 ${displayTime}</span>
           </div>
 
           <button

@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>🥚 雞蛋產銷履歷 - 區塊鏈溯源</title>
 
-  <!-- 引入 QR Code 掃描套件 -->
   <script src="https://unpkg.com/html5-qrcode"></script>
 
   <style>
@@ -110,7 +109,12 @@
     .tl-status  { font-weight: 700; font-size: 1rem; margin-bottom: 4px; }
     .tl-meta    { display: flex; flex-wrap: wrap; gap: 10px; font-size: .85rem; color: #666; margin-bottom: 6px; }
     .tl-footer  { display: flex; justify-content: space-between; align-items: center; font-size: .8rem; color: #999; }
+
     .tl-handler { font-family: monospace; }
+    .tl-location { margin-left: 8px; color: #2E7D32; font-weight: 600; }
+    /* 修正處：將 width 改為 100%，使其在 flex 排版下能正確強迫換行到下方 */
+    .tl-time { width: 100%; margin-top: 4px; color: #888; font-size: 0.8rem; }
+
     .tx-link    { color: #1565C0; text-decoration: none; }
     .tx-link:hover { text-decoration: underline; }
 
@@ -131,7 +135,7 @@
     #reader__scan_region video { border-radius: 10px !important; object-fit: cover; }
     #reader a { color: #43A047 !important; text-decoration: none !important; }
     #reader__dashboard_section_swaplink { display: none !important; }
-.detail-btn {
+    .detail-btn {
       background: none; border: none; color: #1565C0; font-size: .85rem;
       cursor: pointer; font-weight: 600; padding: 4px 8px; border-radius: 6px;
       transition: background 0.2s;
@@ -168,40 +172,33 @@
   </header>
 
   <div class="container">
-    <!-- 搜尋區塊 -->
     <div class="card">
       <div class="search-row">
         <input type="text" id="itemInput" placeholder="輸入商品 ID，例如 EGG001" />
         <button id="scanBtn" class="btn-scan">📷 掃描</button>
         <button id="searchBtn" class="btn-primary">🔍 查詢</button>
       </div>
-      <!-- 掃描畫面容器 -->
       <div id="reader"></div>
     </div>
 
-    <!-- 狀態列 -->
     <div class="card status-bar" id="statusBar" style="display:none">
       <span class="status-item-id" id="itemIdDisplay"></span>
       <span style="font-size:.85rem;color:#888;margin-left:8px;" id="eventCount"></span>
       <span class="status-badge" id="statusBadge"></span>
     </div>
 
-    <!-- 載入中 -->
     <div class="card loading" id="loading" style="display:none">
       <div class="spinner"></div>
       <p style="margin-top:12px">正在從 XRPL 查詢資料…</p>
     </div>
 
-    <!-- 錯誤 -->
     <div id="errorMsg" style="display:none"></div>
 
-    <!-- 時間軸 -->
     <div class="card" id="resultCard" style="display:none">
       <h3 style="margin-bottom:16px;font-size:1rem;color:#555">📋 物流時間軸</h3>
       <div id="timeline"></div>
     </div>
 
-    <!-- 初次提示 -->
     <div class="card" id="welcome">
       <div style="text-align:center;padding:30px 0;color:#888">
         <p style="font-size:2.5rem;margin-bottom:10px">🥚</p>
