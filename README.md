@@ -91,8 +91,8 @@
 
 ```bash
 # 1. 克隆專案
-git clone https://github.com/<你的帳號>/egg-tracker.git
-cd egg-tracker
+git clone https://github.com/C112118148/MIScrypto.git
+cd MIScrypto
 
 # 2. 安裝依賴
 npm install
